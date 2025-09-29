@@ -3,7 +3,7 @@
 1. Clone the repository
 
     ```sh
-    git clone https://github.com/<your-username>/traveling-tournament-problem-group-project.git
+    git clone https://github.com/szelesteya/traveling-tournament-problem-group-project
     cd traveling-tournament-problem-group-project
     ```
 
