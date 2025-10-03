@@ -126,6 +126,23 @@ def compute_travel_and_violations(rounds, n, D, max_consecutive):
     return total_travel, violations
 
 
+# helper function
+def schedule_to_team_sequences(rounds, n):
+    seq = {t: [] for t in range(n)}
+    for rnd in rounds:
+        for h, a in rnd:
+            seq[h].append((a, True))
+            seq[a].append((h, False))
+    return seq
+
+# printer
+def print_schedule(rounds, team_names):
+    print("Schedule (round -> matches):")
+    for r, rnd in enumerate(rounds):
+        matches_str = ", ".join(f"{team_names[h]}(H) vs {team_names[a]}(A)" for h,a in rnd)
+        print(f" R{r+1:02d}: {matches_str}")
+
+
 def main():
     print(f"Teams: {n}, max consecutive home/away allowed ~ {max_consec}")
     print("Building initial double round-robin schedule...")
@@ -133,7 +150,8 @@ def main():
     init_travel, init_viol = compute_travel_and_violations(initial, n, D, max_consec)
     init_score = init_travel + 10000 * init_viol
     print(f"Initial travel cost: {init_travel}, violations: {init_viol}, score: {init_score}\n")
-    
+    print_schedule(initial, team_names)
+
 
 if __name__ == "__main__":
     main()
