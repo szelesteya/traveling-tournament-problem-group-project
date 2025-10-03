@@ -77,10 +77,62 @@ def build_double_round_robin(n):
     return rounds  # length 2*(n-1)
 
 
+def compute_travel_and_violations(rounds, n, D, max_consecutive):
+    """
+    rounds: list of rounds; each round is list of matches (home, away)
+    returns total_travel_cost, total_violations (sum of consecutive home/away > max_consecutive)
+    Travel model:
+      - each team starts at home (their own city)
+      - if playing away, travel from current location to opponent's city
+      - if playing home, stay in home city (no travel)
+      - at the end of the season, return to home from current location (if not already home)
+    """
+    # Build per-team sequence of (opponent, is_home)
+    seq = {t: [] for t in range(n)}
+    for rnd in rounds:
+        # each match is (home, away)
+        for h, a in rnd:
+            seq[h].append((a, True))
+            seq[a].append((h, False))
+
+    total_travel = 0
+    violations = 0
+
+    for t in range(n):
+        cur_loc = t  # start at home city index
+        consecutive_home = 0
+        consecutive_away = 0
+        for opp, at_home in seq[t]:
+            if at_home:
+                # at home: no travel, location becomes home
+                cur_loc = t
+                consecutive_home += 1
+                consecutive_away = 0
+            else:
+                # away: travel from current location to opp
+                total_travel += D[cur_loc, opp]
+                cur_loc = opp
+                consecutive_away += 1
+                consecutive_home = 0
+            # violations counting
+            if consecutive_home > max_consecutive:
+                violations += 1
+            if consecutive_away > max_consecutive:
+                violations += 1
+        # return to home at end
+        if cur_loc != t:
+            total_travel += D[cur_loc, t]
+
+    return total_travel, violations
+
+
 def main():
     print(f"Teams: {n}, max consecutive home/away allowed ~ {max_consec}")
     print("Building initial double round-robin schedule...")
     initial = build_double_round_robin(n)
+    init_travel, init_viol = compute_travel_and_violations(initial, n, D, max_consec)
+    init_score = init_travel + 10000 * init_viol
+    print(f"Initial travel cost: {init_travel}, violations: {init_viol}, score: {init_score}\n")
     
 
 if __name__ == "__main__":
