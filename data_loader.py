@@ -4,8 +4,8 @@ from lxml import etree as ET
 import xml.etree.ElementTree as ET
 import numpy as np
 
-class Loader:
-    def _init_(self, xml_path):
+class Loader():
+    def __init__(self, xml_path):
         self.tree = ET.parse(xml_path)
         self.root = self.tree.getroot()
 
