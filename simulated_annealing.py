@@ -3,6 +3,9 @@ Simple Simulated Annealing solver for the Traveling Tournament Problem (TTP)
 """
 
 from data_loader import Loader
+import random
+import copy
+import math
 
 XML_PATH = "instances/NL4.xml"
 
@@ -141,6 +144,104 @@ def print_schedule(rounds, team_names):
     for r, rnd in enumerate(rounds):
         matches_str = ", ".join(f"{team_names[h]}(H) vs {team_names[a]}(A)" for h,a in rnd)
         print(f" R{r+1:02d}: {matches_str}")
+        
+        
+# By trying many neighbors, the algorithm explores the search space and hopefully 
+# finds one with lower travel distance or fewer violations
+def random_neighbor(rounds):
+    """
+    Return a neighbor schedule by applying one of several moves:
+     - swap two matches' opponents between rounds (swap opponent partner)
+     - swap home/away of a random match
+     - swap entire rounds
+    This implementation tries to keep validity (no self match) but does not always guarantee feasibility.
+    We'll repair trivial self-matches (shouldn't occur with these moves).
+    """
+    s = copy.deepcopy(rounds)
+    n_rounds = len(s)
+    # choose move type
+    r = random.random()
+    if r < 0.4:
+        # swap two matches between two rounds: pick two rounds and two matches and swap the entire match entries
+        r1, r2 = random.sample(range(n_rounds), 2)
+        m1 = random.randrange(len(s[r1]))
+        m2 = random.randrange(len(s[r2]))
+        s[r1][m1], s[r2][m2] = s[r2][m2], s[r1][m1]
+        # after swap, ensure no team plays twice in same round -> simple check & repair by swapping back if violation
+        if not round_is_valid(s[r1]) or not round_is_valid(s[r2]):
+            s[r1][m1], s[r2][m2] = s[r2][m2], s[r1][m1]  # revert
+    elif r < 0.75:
+        # flip home/away in a random round/match
+        rr = random.randrange(n_rounds)
+        mm = random.randrange(len(s[rr]))
+        h, a = s[rr][mm]
+        s[rr][mm] = (a, h)
+        # if this created duplicate team in the round, revert
+        if not round_is_valid(s[rr]):
+            s[rr][mm] = (h, a)
+    else:
+        # swap two whole rounds
+        r1, r2 = random.sample(range(n_rounds), 2)
+        s[r1], s[r2] = s[r2], s[r1]
+    return s
+
+def round_is_valid(round_matches):
+    # ensure teams in that round are unique (no team plays twice in same round) and no self matches
+    seen = set()
+    for h, a in round_matches:
+        if h == a:
+            return False
+        if h in seen or a in seen:
+            return False
+        seen.add(h)
+        seen.add(a)
+    return True
+
+
+# -------------------------
+# Simulated Annealing
+# -------------------------
+def simulated_annealing(initial, n, D, max_consec,
+                        penalty_weight=10000,
+                        T0=1000.0, cooling=0.995,
+                        iterations=20000, iter_per_temp=1):
+    best = copy.deepcopy(initial)
+    best_travel, best_viol = compute_travel_and_violations(best, n, D, max_consec)
+    best_score = best_travel + penalty_weight * best_viol
+
+    cur = copy.deepcopy(best)
+    cur_travel, cur_viol = best_travel, best_viol
+    cur_score = best_score
+
+    T = T0
+
+    for it in range(iterations):
+        cand = random_neighbor(cur)
+        cand_travel, cand_viol = compute_travel_and_violations(cand, n, D, max_consec)
+        cand_score = cand_travel + penalty_weight * cand_viol
+
+        delta = cand_score - cur_score
+        accept = False
+        if delta < 0:
+            accept = True
+        else:
+            if random.random() < math.exp(-delta / max(1e-9, T)):
+                accept = True
+
+        if accept:
+            cur = cand
+            cur_travel, cur_viol = cand_travel, cand_viol
+            cur_score = cand_score
+            if cur_score < best_score and cur_viol == 0:
+                best = copy.deepcopy(cur)
+                best_travel, best_viol = cur_travel, cur_viol
+                best_score = cur_score
+
+        # cooling
+        T *= cooling
+
+    # final evaluation of best (might be infeasible if none feasible found)
+    return best, best_travel, best_viol, best_score
 
 
 def main():
@@ -151,6 +252,17 @@ def main():
     init_score = init_travel + 10000 * init_viol
     print(f"Initial travel cost: {init_travel}, violations: {init_viol}, score: {init_score}\n")
     print_schedule(initial, team_names)
+    print("\nRunning Simulated Annealing ... (this may take a little time)\n")
+
+    best, best_travel, best_viol, best_score = simulated_annealing(
+        initial, n, D, max_consec,
+        penalty_weight=10000,
+        T0=2000.0, cooling=0.999, iterations=20000
+    )
+
+    print("\n--- RESULT ---")
+    print(f"Best travel cost: {best_travel}; violations: {best_viol}; score: {best_score}")
+    print_schedule(best, team_names)
 
 
 if __name__ == "__main__":
