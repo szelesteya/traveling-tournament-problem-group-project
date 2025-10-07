@@ -64,7 +64,7 @@
     <Slots>
       <slot id="0" name="Slot0"/>
       <slot id="1" name="Slot1"/>
-      <slot id="2" name="Slot2"/>
+      <slot id="2" name="Slot2"/>i
       <slot id="3" name="Slot3"/>
       <slot id="4" name="Slot4"/>
       <slot id="5" name="Slot5"/>
@@ -81,7 +81,7 @@
     <BreakConstraints/>
     <FairnessConstraints/>
     <SeparationConstraints>
-      <SE1 max="6" min="1" penalty="1" teamGroups="0" type="HARD"/>
+      <SE1 max="3" min="1" penalty="1" teamGroups="0" type="HARD"/>
     </SeparationConstraints>
   </Constraints>
 

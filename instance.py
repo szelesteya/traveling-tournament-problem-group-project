@@ -1,10 +1,8 @@
-import gurobipy as gp
-from gurobipy import GRB
-import numpy as np
 import lxml.etree as etree
 from pathlib import Path
 from typing import Any
 import sys
+
 
 class Instance:
     teams: dict[int, str]
@@ -13,7 +11,8 @@ class Instance:
     lower_bound: int
     upper_bound: int
 
-    def __init__(self, teams: dict[int, str], distances: dict[(str, str), int], lower_bound: int = 1, upper_bound: int = 2):
+    def __init__(self, teams: dict[int, str], distances: dict[(str, str), int],
+                 lower_bound: int = 1, upper_bound: int = 2):
         self.teams = teams
         self.distances = distances
         self.n = len(teams)
@@ -22,7 +21,7 @@ class Instance:
 
     @classmethod
     def _load_teams(cls, root: Any) -> dict[int, str]:
-        return {team_elem.get("id"): team_elem.get("name") for team_elem in root.xpath('.//Teams/team')}
+        return {int(team_elem.get("id")): team_elem.get("name") for team_elem in root.xpath('.//Teams/team')}
 
     @classmethod
     def _load_distances(cls, root: Any) -> dict[(str, str), int]:
@@ -36,17 +35,21 @@ class Instance:
         return distances
 
     @classmethod
-    def _load_bounds(cls, root: Any) -> (int, int):
+    def _load_bound_limits(cls, root: Any, lower_bound: int, upper_bound: int) -> (int, int):
         constraints = root.xpath(".//Constraints/SeparationConstraints/SE1")
-        lower_bound = int(constraints[0].get("min", 1)) if constraints else 1
-        upper_bound = int(constraints[0].get("max", 2)) if constraints else 2
+        lower_bound_limit = int(constraints[0].get("min", 1)) if constraints else 1
+        assert lower_bound >= lower_bound_limit, \
+            f"Provided lower bound {lower_bound} is below instance limit {lower_bound_limit}"
+        upper_bound_limit = int(constraints[0].get("max", 2)) if constraints else 2
+        assert upper_bound <= upper_bound_limit, \
+            f"Provided upper bound {upper_bound} exceeds instance limit {upper_bound_limit}"
         return lower_bound, upper_bound
 
     @classmethod
-    def from_file(cls, path: str) -> 'Instance':
+    def from_file(cls, path: str, lb: int, ub: int) -> 'Instance':
         tree = etree.parse(Path(path))
         root = tree.getroot()
-        bounds = cls._load_bounds(root)
+        bounds = cls._load_bound_limits(root, lb, ub)
 
         return cls(
             teams=cls._load_teams(root),
@@ -78,5 +81,5 @@ class Instance:
 
 # Read XML data
 if __name__ == "__main__":
-    instance = Instance.from_file(sys.argv[1])
+    instance = Instance.from_file(sys.argv[1], int(sys.argv[2]), int(sys.argv[3]))
     instance.print_summary()
