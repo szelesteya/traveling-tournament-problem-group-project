@@ -1,23 +1,22 @@
 """
 Simple Simulated Annealing solver for the Traveling Tournament Problem (TTP)
 """
-
+import argparse
 from data_loader import Loader
 import random
 import copy
 import math
 
-XML_PATH = "instances/NL4.xml"
-
-
-# Get data from XML file
-loader = Loader(XML_PATH)
-n = loader.get_num_teams()
-team_ids = loader.get_team_ids()
-team_names = loader.get_team_names()
-D = loader.get_distances()
-max_consec = loader.get_max_consecutive()
-
+# -------------------------
+# Parse command-line arguments
+# -------------------------
+def parse_args():
+    parser = argparse.ArgumentParser(description="Simulated Annealing TTP solver")
+    parser.add_argument(
+        "xml_path",
+        help="Path to the XML instance file, e.g., instances/NL4.xml"
+    )
+    return parser.parse_args()
 
 def round_robin_pairings(n):
     """
@@ -245,6 +244,16 @@ def simulated_annealing(initial, n, D, max_consec,
 
 
 def main():
+    args = parse_args()
+    XML_PATH = args.xml_path
+
+    loader = Loader(XML_PATH)
+    n = loader.get_num_teams()
+    team_ids = loader.get_team_ids()
+    team_names = loader.get_team_names()
+    D = loader.get_distances()
+    max_consec = loader.get_max_consecutive()
+    
     print(f"Teams: {n}, max consecutive home/away allowed ~ {max_consec}")
     print("Building initial double round-robin schedule...")
     initial = build_double_round_robin(n)
