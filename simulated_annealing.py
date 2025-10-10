@@ -79,20 +79,15 @@ def build_double_round_robin(n):
     return rounds  # length 2*(n-1)
 
 
-def compute_travel_and_violations(rounds, n, D, max_consecutive):
+def compute_travel_and_violations(rounds, n, D, max_consecutive, count_repeat=True):
     """
     rounds: list of rounds; each round is list of matches (home, away)
-    returns total_travel_cost, total_violations (sum of consecutive home/away > max_consecutive)
-    Travel model:
-      - each team starts at home (their own city)
-      - if playing away, travel from current location to opponent's city
-      - if playing home, stay in home city (no travel)
-      - at the end of the season, return to home from current location (if not already home)
+    returns total_travel_cost, total_violations (sum of consecutive home/away > max_consecutive
+    plus repeat-match violations if count_repeat=True)
     """
     # Build per-team sequence of (opponent, is_home)
     seq = {t: [] for t in range(n)}
     for rnd in rounds:
-        # each match is (home, away)
         for h, a in rnd:
             seq[h].append((a, True))
             seq[a].append((h, False))
@@ -100,23 +95,36 @@ def compute_travel_and_violations(rounds, n, D, max_consecutive):
     total_travel = 0
     violations = 0
 
+    # --- detect repeating matches in consecutive rounds (A vs B in round r and again in r+1)
+    if count_repeat:
+        pairs_per_round = []
+        for rnd in rounds:
+            # --- frozenset prevents A vs B and B vs A as being seen differently
+            pairs_per_round.append(set(frozenset((h, a)) for h, a in rnd))
+        repeat_violations = 0
+        for r in range(len(pairs_per_round) - 1):
+            repeats = pairs_per_round[r].intersection(pairs_per_round[r + 1])
+            repeat_violations += len(repeats)
+        violations += repeat_violations
+    else:
+        repeat_violations = 0
+
+    # Per-team travel + consecutive home/away violations (existing behavior)
     for t in range(n):
         cur_loc = t  # start at home city index
         consecutive_home = 0
         consecutive_away = 0
         for opp, at_home in seq[t]:
             if at_home:
-                # at home: no travel, location becomes home
                 cur_loc = t
                 consecutive_home += 1
                 consecutive_away = 0
             else:
-                # away: travel from current location to opp
                 total_travel += D[cur_loc, opp]
                 cur_loc = opp
                 consecutive_away += 1
                 consecutive_home = 0
-            # violations counting
+            # violations counting (per-game style)
             if consecutive_home > max_consecutive:
                 violations += 1
             if consecutive_away > max_consecutive:
@@ -125,8 +133,9 @@ def compute_travel_and_violations(rounds, n, D, max_consecutive):
         if cur_loc != t:
             total_travel += D[cur_loc, t]
 
+    # Optionally, you can return repeat_violations separately if you want more details:
+    # return total_travel, violations, repeat_violations
     return total_travel, violations
-
 
 # helper function
 def schedule_to_team_sequences(rounds, n):
@@ -265,13 +274,17 @@ def main():
 
     best, best_travel, best_viol, best_score = simulated_annealing(
         initial, n, D, max_consec,
-        penalty_weight=10000,
-        T0=2000.0, cooling=0.999, iterations=20000
+        penalty_weight=100000,
+        T0=8000.0, cooling=0.99999, iterations=1000000
     )
 
     print("\n--- RESULT ---")
     print(f"Best travel cost: {best_travel}; violations: {best_viol}; score: {best_score}")
     print_schedule(best, team_names)
+    if best_viol == 0:
+        print("Feasible solution found!")
+    else:
+        print(f"Infeasible — {best_viol} violations remain.")
 
 
 if __name__ == "__main__":
