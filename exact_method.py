@@ -65,10 +65,10 @@ class ExactMethod:
         # sampled = grouped_patterns[:, :max_patterns]
         # self.A = sampled
         self.A = np.array([
-            [[0, 2, 1, 3, 0]],
-            [[1, 0, 2, 3, 1]],
-            [[2, 0, 3, 1, 2]],
-            [[3, 1, 2, 0, 3]]
+            [[0, 2, 1, 3]],
+            [[1, 0, 2, 3]],
+            [[2, 0, 3, 1]],
+            [[3, 1, 2, 0]]
         ])
 
     def _build_distances(self):
@@ -95,8 +95,8 @@ class ExactMethod:
     def _build_objective(self):
         sum_distances = gp.quicksum(self.Alpha[t, i, j] * self.D[self.A[t, i, j - 1], self.A[t, i, j]] +
             self.Beta[t, i, j] * (self.D[self.A[t, i, j - 1], t] + self.D[t, self.A[t, i, j]])
-            for t in self.T for j in self.J for i in self.I)
-        sum_back_travel = gp.quicksum(self.S[t, i] * self.D[t, self.A[t, i, len(self.T) - 1]] for t in self.T for i in self.I)
+            for t in [0, 1, 2, 3] for j in range(1, len(self.T)) for i in self.I)
+        sum_back_travel = gp.quicksum(self.S[t, i] * self.D[t, self.A[t, i, - 1]] for t in self.T for i in self.I)
         self.model.setObjective(sum_distances + sum_back_travel, GRB.MINIMIZE)
 
     def _build_constraints(self):
@@ -199,6 +199,28 @@ class ExactMethod:
     def print_summary(self):
         print(f"Objective value: {self.model.objVal}")
         self._print_schedule()
+        self._print_travel()
+
+    def _print_travel(self):
+        print("\nTravels")
+        sum_sum_travel = 0
+        for t in self.teams:
+            sum_travel = 0
+            current_loc = t
+            travel_str = f"{self.instance.teams[t]}: {self.instance.teams[t]}"
+            for r in range(2 * (len(self.T) - 1)):
+                next_loc = self.schedule[t, r]
+                distance = self.D[current_loc, next_loc]
+                sum_travel += distance
+                current_loc = next_loc
+                travel_str += f" = {distance} => {self.instance.teams[next_loc]}"
+            back_travel = self.D[self.schedule[t, 2 * (len(self.T) - 1) - 1], t]
+            sum_travel += back_travel
+            sum_sum_travel += sum_travel
+            travel_str += f" = {back_travel} => {self.instance.teams[t]}: {sum_travel}"
+            print(travel_str)
+        print(f"Full travel distance: {sum_sum_travel}")
+            
 
     def _print_schedule(self):
         print("\nSchedule:")
@@ -216,6 +238,8 @@ class ExactMethod:
                 else:
                     row.append(self.instance.teams[self.schedule[t, j]])
             print(" | ".join(row))
+                
+
 
     def validity_of_schedules(self, patterns_per_team = None):
         """
