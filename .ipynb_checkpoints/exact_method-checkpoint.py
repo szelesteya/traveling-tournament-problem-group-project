@@ -376,7 +376,7 @@ class ExactMethod:
             self._build_decision_variables()
             self._build_objective()
             self._build_constraints()
-            self.validity_of_schedules()
+            self.validity_of_schedules(5)
             self.model.update()
             self._solve()
 

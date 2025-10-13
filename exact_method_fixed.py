@@ -49,27 +49,52 @@ class ExactMethod:
             raise AttributeError("Patterns have not been built yet.")
         return range(len(self.A[0]))  # Number of patterns per team
 
-    def _build_patterns(self, no_patterns_per_team: int = 5):
-        # all_patterns = np.array([
-        #     list(perm) + [perm[0]]
-        #     for perm in itertools.permutations(self.T)
-        # ])
+    
+    def _build_patterns(self, K_per_team: int = 6, seed: int | None = 0):
+        """
+        Build opponent-order patterns per team.
+        A[t,i,0] = t, A[t,i,n] = t; A[t,i,1..n-1] = permutation of opponents.
+        Always creates at least one canonical pattern; fills the rest with random valid ones.
+        """
+        import numpy as np
+        rng = np.random.default_rng(seed)
+        n = len(self.T)
+        pat_len = n + 1
+        self.A = np.full((n, K_per_team, pat_len), -1, dtype=int)
+        for t in self.T:
+            # canonical cyclic order: t+1, t+2, ..., t+n-1 (mod n)
+            opps_canonical = [(t + k) % n for k in range(1, n)]
+            self.A[t, 0, :] = [t] + opps_canonical + [t]
+            if K_per_team > 1:
+                seen = {tuple(opps_canonical)}
+                opps = [u for u in self.T if u != t]
+                i = 1
+                attempts = 0
+                while i < K_per_team and attempts < 1000 * K_per_team:
+                    rng.shuffle(opps)
+                    key = tuple(opps)
+                    attempts += 1
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    self.A[t, i, :] = [t] + list(opps) + [t]
+                    i += 1
+                while i < K_per_team:
+                    self.A[t, i, :] = [t] + opps_canonical + [t]
+                    i += 1
 
-        # # Get unique starting values (first elements)
-        # unique_starts = np.unique(all_patterns[:, 0])
 
-        # # Group into a 3D array — one subarray per unique starting value
-        # grouped_patterns = [all_patterns[all_patterns[:, 0] == start] for start in unique_starts]
-        # grouped_patterns = np.array(grouped_patterns, dtype=int)
-        # max_patterns = min(len(grouped_patterns[0]), no_patterns_per_team)
-        # sampled = grouped_patterns[:, :max_patterns]
-        # self.A = sampled
-        self.A = np.array([
-            [[0, 2, 1, 3, 0]],
-            [[1, 0, 2, 3, 1]],
-            [[2, 0, 3, 1, 2]],
-            [[3, 1, 2, 0, 3]]
-        ])
+    def _validate_patterns(self):
+        """
+        Ensure each A[t,i,1..n-1] is a permutation of opponents (no missing/duplicate opponents, no t).
+        Raises on error so you fail fast with a helpful message instead of an IIS later.
+        """
+        for t in self.T:
+            opps = set(self.T) - {t}
+            for i in self.I:
+                row = [int(self.A[t, i, j]) for j in range(1, self.n)]
+                if set(row) != opps or len(set(row)) != (self.n - 1) or any(x == t for x in row):
+                    raise ValueError(f"Invalid pattern for team {t}, i={i}: {row}")
 
     def _build_distances(self):
         self.D = np.zeros((self.n, self.n), dtype=float)
@@ -93,6 +118,7 @@ class ExactMethod:
         self.teams = list(self.T)
 
         self._build_patterns()
+        self._validate_patterns()
         self._build_distances()
 
     def _build_decision_variables(self):
@@ -380,7 +406,20 @@ class ExactMethod:
             self.model.update()
             self._solve()
 
+
+    def _bounds_sanity_check(self):
+        import math
+        L = max(1, int(self.lb))
+        U = int(self.ub)
+        minY = math.ceil(self.n / U)
+        maxY = (self.n - 1) // L
+        print(f"[Bounds check] need Y >= {minY}, allowed Y <= {maxY} (n={self.n}, L={L}, U={U})")
+        if minY > maxY:
+            raise ValueError(f"Infeasible bounds: need at least {minY} insertions from U={U}, "
+                            f"but at most {maxY} fit into total home rounds with L={L}.")
+
     def _solve(self):
+        self._bounds_sanity_check()
         self.model.optimize()
 
         # ---- guard: only read .X if we actually have a solution ----
@@ -402,7 +441,6 @@ class ExactMethod:
             self.model.computeIIS()
             self.model.write("infeasible.ilp")   # or "model.ilp" then "model.ilp"
             self.model.write("iis.ilp")
-            self.model.write("iis.mst")          # IIS as a basis/marker
             print("Wrote IIS to iis.ilp (open it to see which rows/vars cause the conflict).")
         except Exception as e:
             print(f"Could not compute IIS: {e}")
