@@ -60,35 +60,24 @@ class ExactMethod:
             raise AttributeError("Patterns have not been built yet.")
         return range(len(self.A[0]))  # Number of patterns per team
 
-    def _build_patterns(self, no_patterns_per_team: int = 6):
-        all_patterns = np.array(
-            [list(perm) + [perm[0]] for perm in itertools.permutations(self.T)]
+    def _build_patterns(self, no_patterns_per_team: int = 5):
+        # all_patterns = np.array([
+        #     list(perm) + [perm[0]]
+        #     for perm in itertools.permutations(self.T)
+        # ])
+
+        # # Get unique starting values (first elements)
+        # unique_starts = np.unique(all_patterns[:, 0])
+
+        # # Group into a 3D array — one subarray per unique starting value
+        # grouped_patterns = [all_patterns[all_patterns[:, 0] == start] for start in unique_starts]
+        # grouped_patterns = np.array(grouped_patterns, dtype=int)
+        # max_patterns = min(len(grouped_patterns[0]), no_patterns_per_team)
+        # sampled = grouped_patterns[:, :max_patterns]
+        # self.A = sampled
+        self.A = np.array(
+            [[[0, 2, 1, 3]], [[1, 0, 2, 3]], [[2, 0, 3, 1]], [[3, 1, 2, 0]]]
         )
-
-        pattern_len = len(self.T) + 1
-        team_patterns = [all_patterns[all_patterns[:, 0] == t] for t in self.T]
-
-        if no_patterns_per_team is None:
-            max_patterns = max(len(p) for p in team_patterns)
-            sampled_per_team = team_patterns
-        else:
-            max_patterns = no_patterns_per_team
-            rng = np.random.default_rng()
-            sampled_per_team = []
-            for p in team_patterns:
-                if len(p) == 0:
-                    sampled_per_team.append(np.empty((0, pattern_len), dtype=int))
-                    continue
-                if len(p) >= no_patterns_per_team:
-                    idx = rng.choice(len(p), size=no_patterns_per_team, replace=False)
-                else:
-                    idx = rng.choice(len(p), size=no_patterns_per_team, replace=True)
-                sampled_per_team.append(p[idx])
-
-        self.A = np.full((len(self.T), max_patterns, pattern_len), -1, dtype=int)
-        for t, sp in enumerate(sampled_per_team):
-            for i, row in enumerate(sp):
-                self.A[t, i, :] = row
 
     def _build_distances(self):
         self.D = np.zeros((self.n, self.n))
@@ -122,17 +111,18 @@ class ExactMethod:
         )
 
     def _build_objective(self):
-        self.model.setObjective(
-            gp.quicksum(
-                self.Alpha[t, i, j] * self.D[self.A[t, i, j - 1], self.A[t, i, j]]
-                + self.Beta[t, i, j]
-                * (self.D[self.A[t, i, j - 1], t] + self.D[t, self.A[t, i, j]])
-                for t in self.T
-                for j in self.J
-                for i in self.I
-            ),
-            GRB.MINIMIZE,
+        sum_distances = gp.quicksum(
+            self.Alpha[t, i, j] * self.D[self.A[t, i, j - 1], self.A[t, i, j]]
+            + self.Beta[t, i, j]
+            * (self.D[self.A[t, i, j - 1], t] + self.D[t, self.A[t, i, j]])
+            for t in [0, 1, 2, 3]
+            for j in range(1, len(self.T))
+            for i in self.I
         )
+        sum_back_travel = gp.quicksum(
+            self.S[t, i] * self.D[t, self.A[t, i, -1]] for t in self.T for i in self.I
+        )
+        self.model.setObjective(sum_distances + sum_back_travel, GRB.MINIMIZE)
 
     def _build_constraints(self):
         # (0) \sum_{i=1}^m s_{\vec a_{t,i}} = 1
@@ -220,18 +210,11 @@ class ExactMethod:
         )
 
         # (9) ∑_{j=1}^{n-u} ∑_{k=0}^{u-1} y_{t, j+k} ≥ 1
-        self.model.addConstrs(
-            (
-                gp.quicksum(
-                    self.Y[t, j + k]
-                    for j in range(1, self.n - self.ub + 1)
-                    for k in range(self.ub)
-                )
-                >= 1
-                for t in self.T
-            ),
-            name="max_away",
-        )
+        # self.model.addConstrs(
+        #     (gp.quicksum(self.Y[t, j + k] for j in range(1, self.n - self.ub + 1) for k in range(self.ub)) >= 1
+        #      for t in self.T),
+        #     name="max_away"
+        # )
 
         # (10) ∑_{j=0}^{n-1} h_{t,j} = n - 1
         self.model.addConstrs(
@@ -266,6 +249,27 @@ class ExactMethod:
     def print_summary(self):
         print(f"Objective value: {self.model.objVal}")
         self._print_schedule()
+        self._print_travel()
+
+    def _print_travel(self):
+        print("\nTravels")
+        sum_sum_travel = 0
+        for t in self.teams:
+            sum_travel = 0
+            current_loc = t
+            travel_str = f"{self.instance.teams[t]}: {self.instance.teams[t]}"
+            for r in range(2 * (len(self.T) - 1)):
+                next_loc = self.schedule[t, r]
+                distance = self.D[current_loc, next_loc]
+                sum_travel += distance
+                current_loc = next_loc
+                travel_str += f" = {distance} => {self.instance.teams[next_loc]}"
+            back_travel = self.D[self.schedule[t, 2 * (len(self.T) - 1) - 1], t]
+            sum_travel += back_travel
+            sum_sum_travel += sum_travel
+            travel_str += f" = {back_travel} => {self.instance.teams[t]}: {sum_travel}"
+            print(travel_str)
+        print(f"Full travel distance: {sum_sum_travel}")
 
     def _print_schedule(self):
         print("\nSchedule:")
@@ -286,6 +290,200 @@ class ExactMethod:
                     row.append(self.instance.teams[self.schedule[t, j]])
             print(" | ".join(row))
 
+    def validity_of_schedules(self, patterns_per_team=None):
+        """
+        Orchestrator for Section 2.1.4.
+        Requires: self.A, self.S, self.H, self.T, self.n built already.
+        Creates: self.r_pos, self.q, self.w_and, self.delta
+        Adds constraints: (13)–(23)
+        """
+        self._init_sets(patterns_per_team)
+        self._build_tournament_variables()
+
+        self._add_r_constraints()  # (13)–(15)
+        self._add_q_constraints()  # (16)–(17)
+        self._add_and_constraints()  # (18)
+        self._add_delta_mapping()  # (19)
+        self._add_tournament_constraints()  # (20)–(23)
+
+    def _init_sets(self, patterns_per_team=None):
+        self.Rounds = list(range(1, 2 * (self.n - 1) + 1))
+        self.AwayPositions = list(range(1, self.n))
+
+        if patterns_per_team is None:
+            I_all = list(range(self.A.shape[1]))
+            self.I_map = {t: I_all for t in self.T}
+        else:
+            self.I_map = {t: list(patterns_per_team[t]) for t in self.T}
+
+    def _build_tournament_variables(self):
+
+        # (13)–(17): r and q
+        self.r_pos = self.model.addVars(
+            self.T, self.AwayPositions, vtype=GRB.CONTINUOUS, name="r"
+        )
+        self.q = self.model.addVars(
+            self.T, self.AwayPositions, self.Rounds, vtype=GRB.BINARY, name="q"
+        )
+
+        # (18): w = S AND q
+        self.w_and = gp.tupledict()
+        for t in self.T:
+            for i in self.I_map[t]:
+                for j in self.AwayPositions:
+                    for rnd in self.Rounds:
+                        self.w_and[t, i, j, rnd] = self.model.addVar(
+                            vtype=GRB.BINARY, name=f"w[{t},{i},{j},{rnd}]"
+                        )
+
+        # (19)–(23): delta (away-at)
+        self.delta = self.model.addVars(
+            self.T, self.T, self.Rounds, vtype=GRB.BINARY, name="delta"
+        )
+
+        self.model.update()
+
+    def _add_r_constraints(self):
+        # (13) r_{t,1} = 1 + h_{t,0}
+        self.model.addConstrs(
+            (self.r_pos[t, 1] == 1 + self.H[t, 0] for t in self.T), name="c13"
+        )
+
+        # (14) r_{t,j+1} = r_{t,j} + 1 + h_{t,j}  for j=1..n-2
+        if self.n >= 3:
+            self.model.addConstrs(
+                (
+                    self.r_pos[t, j + 1] == self.r_pos[t, j] + 1 + self.H[t, j]
+                    for t in self.T
+                    for j in range(1, self.n - 1)
+                ),
+                name="c14",
+            )
+
+        # (15) bounds
+        self.model.addConstrs((self.r_pos[t, 1] >= 1 for t in self.T), name="c15_lower")
+        self.model.addConstrs(
+            (self.r_pos[t, self.n - 1] <= 2 * (self.n - 1) for t in self.T),
+            name="c15_upper",
+        )
+
+    def _add_q_constraints(self):
+        # (16)
+        self.model.addConstrs(
+            (
+                gp.quicksum(self.q[t, j, rnd] for rnd in self.Rounds) == 1
+                for t in self.T
+                for j in self.AwayPositions
+            ),
+            name="c16",
+        )
+        # (17)
+        self.model.addConstrs(
+            (
+                gp.quicksum(rnd * self.q[t, j, rnd] for rnd in self.Rounds)
+                == self.r_pos[t, j]
+                for t in self.T
+                for j in self.AwayPositions
+            ),
+            name="c17",
+        )
+
+    def _add_and_constraints(self):
+        # (18) w = S AND q
+        for t in self.T:
+            for i in self.I_map[t]:
+                for j in self.AwayPositions:
+                    for rnd in self.Rounds:
+                        self.model.addConstr(
+                            self.w_and[t, i, j, rnd] <= self.S[t, i],
+                            name=f"c18a[{t},{i},{j},{rnd}]",
+                        )
+                        self.model.addConstr(
+                            self.w_and[t, i, j, rnd] <= self.q[t, j, rnd],
+                            name=f"c18b[{t},{i},{j},{rnd}]",
+                        )
+                        self.model.addConstr(
+                            self.w_and[t, i, j, rnd]
+                            >= self.S[t, i] + self.q[t, j, rnd] - 1,
+                            name=f"c18c[{t},{i},{j},{rnd}]",
+                        )
+
+    def _opponent_at(self, t: int, i: int, j: int) -> int:
+        # A[t,i,0]=t and A[t,i,n]=t
+        return int(self.A[t, i, j])
+
+    def _add_delta_mapping(self):
+        # (19)  delta_{t,t',r} = sum_{i} sum_{j: a_{t,i,j}=t'} w_{t,i,j,r}
+        for t in self.T:
+            for t2 in self.T:
+                if t == t2:
+                    continue
+                for rnd in self.Rounds:
+                    self.model.addConstr(
+                        self.delta[t, t2, rnd]
+                        == gp.quicksum(
+                            self.w_and[t, i, j, rnd]
+                            for i in self.I_map[t]
+                            for j in self.AwayPositions
+                            if self._opponent_at(t, i, j) == t2
+                        ),
+                        name=f"c19[{t},{t2},{rnd}]",
+                    )
+
+    def _add_tournament_constraints(self):
+        # (20) one game per round per team
+        self.model.addConstrs(
+            (
+                gp.quicksum(
+                    self.delta[t, t2, rnd] + self.delta[t2, t, rnd]
+                    for t2 in self.T
+                    if t2 != t
+                )
+                == 1
+                for t in self.T
+                for rnd in self.Rounds
+            ),
+            name="c20",
+        )
+        # (21) double round-robin (once away, once home)
+        self.model.addConstrs(
+            (
+                gp.quicksum(self.delta[t, t2, rnd] for rnd in self.Rounds) == 1
+                for t in self.T
+                for t2 in self.T
+                if t2 != t
+            ),
+            name="c21a",
+        )
+        self.model.addConstrs(
+            (
+                gp.quicksum(self.delta[t2, t, rnd] for rnd in self.Rounds) == 1
+                for t in self.T
+                for t2 in self.T
+                if t2 != t
+            ),
+            name="c21b",
+        )
+        # (22) no immediate rematch
+        if len(self.Rounds) >= 2:
+            self.model.addConstrs(
+                (
+                    (self.delta[t, t2, rnd] + self.delta[t2, t, rnd])
+                    + (self.delta[t, t2, rnd + 1] + self.delta[t2, t, rnd + 1])
+                    <= 1
+                    for t in self.T
+                    for t2 in self.T
+                    if t2 != t
+                    for rnd in self.Rounds[:-1]
+                ),
+                name="c22",
+            )
+        # (23) no self matches
+        self.model.addConstrs(
+            (self.delta[t, t, rnd] == 0 for t in self.T for rnd in self.Rounds),
+            name="c23",
+        )
+
     def solve(self):
         if not hasattr(self, "gurobi_options"):
             self.gurobi_options = {}
@@ -293,11 +491,11 @@ class ExactMethod:
         with gp.Env(empty=True) as env:
             env.start()
             self.model = gp.Model("TTP", env=env)
-            self._build_patterns()
             self._build_variables()
             self._build_decision_variables()
             self._build_objective()
             self._build_constraints()
+            self.validity_of_schedules()
             self.model.update()
             self._solve()
 
