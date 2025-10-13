@@ -4,25 +4,36 @@ from gurobipy import GRB
 import itertools
 import numpy as np
 import sys
-import math
 
 
 def setup_gurobi_options(lic_content: str) -> dict[str, str]:
     lines = lic_content.strip().split("\n")
 
     wls_access_prefix = "WLSACCESSID="
-    wls_access_id = [line[len(wls_access_prefix):] for line in lines if line.startswith(wls_access_prefix)][0]
+    wls_access_id = [
+        line[len(wls_access_prefix) :]
+        for line in lines
+        if line.startswith(wls_access_prefix)
+    ][0]
 
     wls_secret_prefix = "WLSSECRET="
-    wls_secret = [line[len(wls_access_prefix):] for line in lines if line.startswith(wls_secret_prefix)][0]
+    wls_secret = [
+        line[len(wls_access_prefix) :]
+        for line in lines
+        if line.startswith(wls_secret_prefix)
+    ][0]
 
     license_id_prefix = "LICENSEID="
-    license_id = [int(line[len(license_id_prefix):]) for line in lines if line.startswith(license_id_prefix)][0]
+    license_id = [
+        int(line[len(license_id_prefix) :])
+        for line in lines
+        if line.startswith(license_id_prefix)
+    ][0]
 
     return {
-        "WLSACCESSID": wls_access_id,
-        "WLSSECRET": wls_secret,
-        "LICENSEID": license_id,
+        "WLSAccessID": wls_access_id,
+        "WLSSecret": wls_secret,
+        "LicenseID": license_id,
     }
 
 
@@ -50,10 +61,9 @@ class ExactMethod:
         return range(len(self.A[0]))  # Number of patterns per team
 
     def _build_patterns(self, no_patterns_per_team: int = 6):
-        all_patterns = np.array([
-            list(perm) + [perm[0]]
-            for perm in itertools.permutations(self.T)
-        ])
+        all_patterns = np.array(
+            [list(perm) + [perm[0]] for perm in itertools.permutations(self.T)]
+        )
 
         pattern_len = len(self.T) + 1
         team_patterns = [all_patterns[all_patterns[:, 0] == t] for t in self.T]
@@ -95,100 +105,148 @@ class ExactMethod:
     def _build_decision_variables(self):
         # Y
         self.Y = self.model.addVars(self.T, self.J, vtype=GRB.BINARY, name="y")
-        self.H = self.model.addVars(self.T, self.J, vtype=GRB.INTEGER, name="h",
-                                    lb=0, ub=self.instance.upper_bound)
+        self.H = self.model.addVars(
+            self.T,
+            self.J,
+            vtype=GRB.INTEGER,
+            name="h",
+            lb=0,
+            ub=self.instance.upper_bound,
+        )
         self.S = self.model.addVars(self.T, self.I, vtype=GRB.BINARY, name="s")
-        self.Alpha = self.model.addVars(self.T, self.I, self.J, vtype=GRB.BINARY, name="alpha")
-        self.Beta = self.model.addVars(self.T, self.I, self.J, vtype=GRB.BINARY, name="beta")
+        self.Alpha = self.model.addVars(
+            self.T, self.I, self.J, vtype=GRB.BINARY, name="alpha"
+        )
+        self.Beta = self.model.addVars(
+            self.T, self.I, self.J, vtype=GRB.BINARY, name="beta"
+        )
 
     def _build_objective(self):
-        self.model.setObjective(gp.quicksum(
-            self.Alpha[t, i, j] * self.D[self.A[t, i, j - 1], self.A[t, i, j]] +
-            self.Beta[t, i, j] * (self.D[self.A[t, i, j - 1], t] + self.D[t, self.A[t, i, j]])
-            for t in self.T for j in self.J for i in self.I
-        ), GRB.MINIMIZE)
+        self.model.setObjective(
+            gp.quicksum(
+                self.Alpha[t, i, j] * self.D[self.A[t, i, j - 1], self.A[t, i, j]]
+                + self.Beta[t, i, j]
+                * (self.D[self.A[t, i, j - 1], t] + self.D[t, self.A[t, i, j]])
+                for t in self.T
+                for j in self.J
+                for i in self.I
+            ),
+            GRB.MINIMIZE,
+        )
 
     def _build_constraints(self):
         # (0) \sum_{i=1}^m s_{\vec a_{t,i}} = 1
         self.model.addConstrs(
-            (gp.quicksum(self.S[t, i] for i in self.I) == 1
-             for t in self.T),
-            name="one_pattern_per_team"
+            (gp.quicksum(self.S[t, i] for i in self.I) == 1 for t in self.T),
+            name="one_pattern_per_team",
         )
 
         # (1) α_{t,i,j} ≤ 1 - y_{t,j}
         self.model.addConstrs(
-            (self.Alpha[t, i, j] <= 1 - self.Y[t, j]
-             for t in self.T for i in self.I for j in self.J),
-            name="alpha_le_1_minus_y"
+            (
+                self.Alpha[t, i, j] <= 1 - self.Y[t, j]
+                for t in self.T
+                for i in self.I
+                for j in self.J
+            ),
+            name="alpha_le_1_minus_y",
         )
 
         # (2) α_{t,i,j} ≤ s_i
         self.model.addConstrs(
-            (self.Alpha[t, i, j] <= self.S[t, i]
-             for t in self.T for i in self.I for j in self.J),
-            name="alpha_le_s"
+            (
+                self.Alpha[t, i, j] <= self.S[t, i]
+                for t in self.T
+                for i in self.I
+                for j in self.J
+            ),
+            name="alpha_le_s",
         )
 
         # (3) α_{t,i,j} ≥ s_i - y_{i,j}
         self.model.addConstrs(
-            (self.Alpha[t, i, j] >= self.S[t, i] - self.Y[t, j]
-             for t in self.T for i in self.I for j in self.J),
-            name="alpha_ge_s_minus_y"
+            (
+                self.Alpha[t, i, j] >= self.S[t, i] - self.Y[t, j]
+                for t in self.T
+                for i in self.I
+                for j in self.J
+            ),
+            name="alpha_ge_s_minus_y",
         )
 
         # (4) β_{t,i,j} ≤ y_{i,j}
         self.model.addConstrs(
-            (self.Beta[t, i, j] <= self.Y[t, j]
-             for t in self.T for i in self.I for j in self.J),
-            name="beta_le_y"
+            (
+                self.Beta[t, i, j] <= self.Y[t, j]
+                for t in self.T
+                for i in self.I
+                for j in self.J
+            ),
+            name="beta_le_y",
         )
 
         # (5) β_{t,i,j} ≤ s_i
         self.model.addConstrs(
-            (self.Beta[t, i, j] <= self.S[t, i]
-             for t in self.T for i in self.I for j in self.J),
-            name="beta_le_s"
+            (
+                self.Beta[t, i, j] <= self.S[t, i]
+                for t in self.T
+                for i in self.I
+                for j in self.J
+            ),
+            name="beta_le_s",
         )
 
         # (6) β_{t,i,j} ≥ s_i + y_{i,j} - 1
         self.model.addConstrs(
-            (self.Beta[t, i, j] >= self.S[t, i] + self.Y[t, j] - 1
-             for t in self.T for i in self.I for j in self.J),
-            name="beta_ge_s_plus_y_minus_1"
+            (
+                self.Beta[t, i, j] >= self.S[t, i] + self.Y[t, j] - 1
+                for t in self.T
+                for i in self.I
+                for j in self.J
+            ),
+            name="beta_ge_s_plus_y_minus_1",
         )
 
         # (7) h_{t, j} ≤ y_{t, j} * M
         self.model.addConstrs(
-            (self.H[t, j] <= self.Y[t, j] * self.ub
-             for t in self.T for j in self.J),
-            name="home_le_yM"
+            (self.H[t, j] <= self.Y[t, j] * self.ub for t in self.T for j in self.J),
+            name="home_le_yM",
         )
 
         # (8) h_{t, j} - y_{t, j} ≥ 0
         self.model.addConstrs(
-            (self.H[t, j] - self.Y[t, j] >= 0
-             for t in self.T for j in self.J),
-            name="h_minus_y_ge_0"
+            (self.H[t, j] - self.Y[t, j] >= 0 for t in self.T for j in self.J),
+            name="h_minus_y_ge_0",
         )
 
         # (9) ∑_{j=1}^{n-u} ∑_{k=0}^{u-1} y_{t, j+k} ≥ 1
         self.model.addConstrs(
-            (gp.quicksum(self.Y[t, j + k] for j in range(1, self.n - self.ub + 1) for k in range(self.ub)) >= 1
-             for t in self.T),
-            name="max_away"
+            (
+                gp.quicksum(
+                    self.Y[t, j + k]
+                    for j in range(1, self.n - self.ub + 1)
+                    for k in range(self.ub)
+                )
+                >= 1
+                for t in self.T
+            ),
+            name="max_away",
         )
 
         # (10) ∑_{j=0}^{n-1} h_{t,j} = n - 1
         self.model.addConstrs(
-            (gp.quicksum(self.H[t, j] for j in range(self.n)) == self.n - 1
-             for t in self.T),
-            name="no_home_games"
+            (
+                gp.quicksum(self.H[t, j] for j in range(self.n)) == self.n - 1
+                for t in self.T
+            ),
+            name="no_home_games",
         )
 
     def _build_schedule(self):
         self.schedule = np.empty((self.n, 2 * (self.n - 1)), dtype=int)
-        chosen_schedules = [(t, i) for t in self.T for i in self.I if self.S[t, i].X > 0.5]
+        chosen_schedules = [
+            (t, i) for t in self.T for i in self.I if self.S[t, i].X > 0.5
+        ]
 
         for t, i in chosen_schedules:
             rounds = 0
@@ -212,7 +270,9 @@ class ExactMethod:
     def _print_schedule(self):
         print("\nSchedule:")
 
-        header = "Round | " + " | ".join([f"{self.instance.teams[t]}" for t in self.teams])
+        header = "Round | " + " | ".join(
+            [f"{self.instance.teams[t]}" for t in self.teams]
+        )
         print(header)
         print("-" * len(header))
 
@@ -229,7 +289,9 @@ class ExactMethod:
     def solve(self):
         if not hasattr(self, "gurobi_options"):
             self.gurobi_options = {}
-        with gp.Env(params=self.gurobi_options) as env:
+        print(self.gurobi_options)
+        with gp.Env(empty=True) as env:
+            env.start()
             self.model = gp.Model("TTP", env=env)
             self._build_patterns()
             self._build_variables()
@@ -255,6 +317,7 @@ class ExactMethod:
             print(f"Optimization ended with status {self.model.status}")
         self._build_schedule()
 
+
 if __name__ == "__main__":
     gurobi_lic = None
     if len(sys.argv) < 2:
@@ -273,5 +336,3 @@ if __name__ == "__main__":
     method.solve()
     if method.model.status == GRB.OPTIMAL:
         method.print_summary()
-
-
