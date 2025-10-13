@@ -1,6 +1,7 @@
 from instance import Instance
 import gurobipy as gp
 from gurobipy import GRB
+
 import itertools
 import numpy as np
 import sys
@@ -31,9 +32,9 @@ def setup_gurobi_options(lic_content: str) -> dict[str, str]:
     ][0]
 
     return {
-        "WLSAccessID": wls_access_id,
-        "WLSSecret": wls_secret,
-        "LicenseID": license_id,
+        "WLSACCESSID": wls_access_id,
+        "WLSSECRET": wls_secret,
+        "LICENSEID": license_id,
     }
 
 
@@ -61,23 +62,22 @@ class ExactMethod:
         return range(len(self.A[0]))  # Number of patterns per team
 
     def _build_patterns(self, no_patterns_per_team: int = 5):
-        # all_patterns = np.array([
-        #     list(perm) + [perm[0]]
-        #     for perm in itertools.permutations(self.T)
-        # ])
+        all_patterns = np.array([list(perm) for perm in itertools.permutations(self.T)])
 
-        # # Get unique starting values (first elements)
-        # unique_starts = np.unique(all_patterns[:, 0])
+        # Get unique starting values (first elements)
+        unique_starts = np.unique(all_patterns[:, 0])
 
-        # # Group into a 3D array — one subarray per unique starting value
-        # grouped_patterns = [all_patterns[all_patterns[:, 0] == start] for start in unique_starts]
-        # grouped_patterns = np.array(grouped_patterns, dtype=int)
-        # max_patterns = min(len(grouped_patterns[0]), no_patterns_per_team)
-        # sampled = grouped_patterns[:, :max_patterns]
-        # self.A = sampled
-        self.A = np.array(
-            [[[0, 2, 1, 3]], [[1, 0, 2, 3]], [[2, 0, 3, 1]], [[3, 1, 2, 0]]]
-        )
+        # Group into a 3D array — one subarray per unique starting value
+        grouped_patterns = [
+            all_patterns[all_patterns[:, 0] == start] for start in unique_starts
+        ]
+        grouped_patterns = np.array(grouped_patterns, dtype=int)
+        max_patterns = min(len(grouped_patterns[0]), no_patterns_per_team)
+        sampled = grouped_patterns[:, :max_patterns]
+        self.A = sampled
+        # self.A = np.array(
+        #     [[[0, 2, 1, 3]], [[1, 0, 2, 3]], [[2, 0, 3, 1]], [[3, 1, 2, 0]]]
+        # )
 
     def _build_distances(self):
         self.D = np.zeros((self.n, self.n))
@@ -103,24 +103,28 @@ class ExactMethod:
             ub=self.instance.upper_bound,
         )
         self.S = self.model.addVars(self.T, self.I, vtype=GRB.BINARY, name="s")
-        self.Alpha = self.model.addVars(
-            self.T, self.I, self.J, vtype=GRB.BINARY, name="alpha"
-        )
-        self.Beta = self.model.addVars(
-            self.T, self.I, self.J, vtype=GRB.BINARY, name="beta"
+        # gamma[t,i,j] = s[t,i] AND y[t,j-1] (j = 1..n-1)
+        self.Gamma = self.model.addVars(
+            self.T, self.I, range(1, self.n), vtype=GRB.BINARY, name="gamma"
         )
 
     def _build_objective(self):
         sum_distances = gp.quicksum(
-            self.Alpha[t, i, j] * self.D[self.A[t, i, j - 1], self.A[t, i, j]]
-            + self.Beta[t, i, j]
-            * (self.D[self.A[t, i, j - 1], t] + self.D[t, self.A[t, i, j]])
-            for t in [0, 1, 2, 3]
+            # Base edge cost when no home break between consecutive away opponents
+            self.S[t, i] * self.D[self.A[t, i, j - 1], self.A[t, i, j]]
+            # If there is a home block (gamma=1), add the extra detour via home
+            + self.Gamma[t, i, j]
+            * (
+                self.D[self.A[t, i, j - 1], t]
+                + self.D[t, self.A[t, i, j]]
+                - self.D[self.A[t, i, j - 1], self.A[t, i, j]]
+            )
+            for t in self.T
             for j in range(1, len(self.T))
             for i in self.I
         )
         sum_back_travel = gp.quicksum(
-            self.S[t, i] * self.D[t, self.A[t, i, -1]] for t in self.T for i in self.I
+            self.S[t, i] * self.D[self.A[t, i, -1], t] for t in self.T for i in self.I
         )
         self.model.setObjective(sum_distances + sum_back_travel, GRB.MINIMIZE)
 
@@ -131,70 +135,35 @@ class ExactMethod:
             name="one_pattern_per_team",
         )
 
-        # (1) α_{t,i,j} ≤ 1 - y_{t,j}
+        # (1)–(3) gamma = s AND y_{t,j-1} for j=1..n-1
         self.model.addConstrs(
             (
-                self.Alpha[t, i, j] <= 1 - self.Y[t, j]
+                self.Gamma[t, i, j] <= self.Y[t, j - 1]
                 for t in self.T
                 for i in self.I
-                for j in self.J
+                for j in range(1, self.n)
             ),
-            name="alpha_le_1_minus_y",
+            name="gamma_le_y",
         )
 
-        # (2) α_{t,i,j} ≤ s_i
         self.model.addConstrs(
             (
-                self.Alpha[t, i, j] <= self.S[t, i]
+                self.Gamma[t, i, j] <= self.S[t, i]
                 for t in self.T
                 for i in self.I
-                for j in self.J
+                for j in range(1, self.n)
             ),
-            name="alpha_le_s",
+            name="gamma_le_s",
         )
 
-        # (3) α_{t,i,j} ≥ s_i - y_{i,j}
         self.model.addConstrs(
             (
-                self.Alpha[t, i, j] >= self.S[t, i] - self.Y[t, j]
+                self.Gamma[t, i, j] >= self.S[t, i] + self.Y[t, j - 1] - 1
                 for t in self.T
                 for i in self.I
-                for j in self.J
+                for j in range(1, self.n)
             ),
-            name="alpha_ge_s_minus_y",
-        )
-
-        # (4) β_{t,i,j} ≤ y_{i,j}
-        self.model.addConstrs(
-            (
-                self.Beta[t, i, j] <= self.Y[t, j]
-                for t in self.T
-                for i in self.I
-                for j in self.J
-            ),
-            name="beta_le_y",
-        )
-
-        # (5) β_{t,i,j} ≤ s_i
-        self.model.addConstrs(
-            (
-                self.Beta[t, i, j] <= self.S[t, i]
-                for t in self.T
-                for i in self.I
-                for j in self.J
-            ),
-            name="beta_le_s",
-        )
-
-        # (6) β_{t,i,j} ≥ s_i + y_{i,j} - 1
-        self.model.addConstrs(
-            (
-                self.Beta[t, i, j] >= self.S[t, i] + self.Y[t, j] - 1
-                for t in self.T
-                for i in self.I
-                for j in self.J
-            ),
-            name="beta_ge_s_plus_y_minus_1",
+            name="gamma_ge_s_plus_y_minus_1",
         )
 
         # (7) h_{t, j} ≤ y_{t, j} * M
@@ -209,11 +178,18 @@ class ExactMethod:
             name="h_minus_y_ge_0",
         )
 
-        # (9) ∑_{j=1}^{n-u} ∑_{k=0}^{u-1} y_{t, j+k} ≥ 1
+        # # (9) ∑_{j=1}^{n-u} ∑_{k=0}^{u-1} y_{t, j+k} ≥ 1
         # self.model.addConstrs(
-        #     (gp.quicksum(self.Y[t, j + k] for j in range(1, self.n - self.ub + 1) for k in range(self.ub)) >= 1
-        #      for t in self.T),
-        #     name="max_away"
+        #     (
+        #         gp.quicksum(
+        #             self.Y[t, j + k]
+        #             for j in range(1, self.n - self.ub + 1)
+        #             for k in range(self.ub)
+        #         )
+        #         >= 1
+        #         for t in self.T
+        #     ),
+        #     name="max_away",
         # )
 
         # (10) ∑_{j=0}^{n-1} h_{t,j} = n - 1
@@ -445,24 +421,19 @@ class ExactMethod:
             ),
             name="c20",
         )
-        # (21) double round-robin (once away, once home)
+        # (21) double round-robin (once away, once home) – combined per unordered pair
         self.model.addConstrs(
             (
-                gp.quicksum(self.delta[t, t2, rnd] for rnd in self.Rounds) == 1
+                gp.quicksum(
+                    self.delta[t, t2, rnd] + self.delta[t2, t, rnd]
+                    for rnd in self.Rounds
+                )
+                == 2
                 for t in self.T
                 for t2 in self.T
-                if t2 != t
+                if t2 > t
             ),
-            name="c21a",
-        )
-        self.model.addConstrs(
-            (
-                gp.quicksum(self.delta[t2, t, rnd] for rnd in self.Rounds) == 1
-                for t in self.T
-                for t2 in self.T
-                if t2 != t
-            ),
-            name="c21b",
+            name="c21",
         )
         # (22) no immediate rematch
         if len(self.Rounds) >= 2:
@@ -473,7 +444,7 @@ class ExactMethod:
                     <= 1
                     for t in self.T
                     for t2 in self.T
-                    if t2 != t
+                    if t2 > t
                     for rnd in self.Rounds[:-1]
                 ),
                 name="c22",
@@ -488,7 +459,7 @@ class ExactMethod:
         if not hasattr(self, "gurobi_options"):
             self.gurobi_options = {}
         print(self.gurobi_options)
-        with gp.Env(empty=True) as env:
+        with gp.Env(params=self.gurobi_options) as env:
             env.start()
             self.model = gp.Model("TTP", env=env)
             self._build_variables()
@@ -534,3 +505,4 @@ if __name__ == "__main__":
     method.solve()
     if method.model.status == GRB.OPTIMAL:
         method.print_summary()
+        method.model.write("models/model.lp")
