@@ -49,36 +49,27 @@ class ExactMethod:
             raise AttributeError("Patterns have not been built yet.")
         return range(len(self.A[0]))  # Number of patterns per team
 
-    def _build_patterns(self, no_patterns_per_team: int = 6):
-        all_patterns = np.array([
-            list(perm) + [perm[0]]
-            for perm in itertools.permutations(self.T)
+    def _build_patterns(self, no_patterns_per_team: int = 5):
+        # all_patterns = np.array([
+        #     list(perm) + [perm[0]]
+        #     for perm in itertools.permutations(self.T)
+        # ])
+
+        # # Get unique starting values (first elements)
+        # unique_starts = np.unique(all_patterns[:, 0])
+
+        # # Group into a 3D array — one subarray per unique starting value
+        # grouped_patterns = [all_patterns[all_patterns[:, 0] == start] for start in unique_starts]
+        # grouped_patterns = np.array(grouped_patterns, dtype=int)
+        # max_patterns = min(len(grouped_patterns[0]), no_patterns_per_team)
+        # sampled = grouped_patterns[:, :max_patterns]
+        # self.A = sampled
+        self.A = np.array([
+            [[0, 2, 1, 3, 0]],
+            [[1, 0, 2, 3, 1]],
+            [[2, 0, 3, 1, 2]],
+            [[3, 1, 2, 0, 3]]
         ])
-
-        pattern_len = len(self.T) + 1
-        team_patterns = [all_patterns[all_patterns[:, 0] == t] for t in self.T]
-
-        if no_patterns_per_team is None:
-            max_patterns = max(len(p) for p in team_patterns)
-            sampled_per_team = team_patterns
-        else:
-            max_patterns = no_patterns_per_team
-            rng = np.random.default_rng()
-            sampled_per_team = []
-            for p in team_patterns:
-                if len(p) == 0:
-                    sampled_per_team.append(np.empty((0, pattern_len), dtype=int))
-                    continue
-                if len(p) >= no_patterns_per_team:
-                    idx = rng.choice(len(p), size=no_patterns_per_team, replace=False)
-                else:
-                    idx = rng.choice(len(p), size=no_patterns_per_team, replace=True)
-                sampled_per_team.append(p[idx])
-
-        self.A = np.full((len(self.T), max_patterns, pattern_len), -1, dtype=int)
-        for t, sp in enumerate(sampled_per_team):
-            for i, row in enumerate(sp):
-                self.A[t, i, :] = row
 
     def _build_distances(self):
         self.D = np.zeros((self.n, self.n))
@@ -102,11 +93,11 @@ class ExactMethod:
         self.Beta = self.model.addVars(self.T, self.I, self.J, vtype=GRB.BINARY, name="beta")
 
     def _build_objective(self):
-        self.model.setObjective(gp.quicksum(
-            self.Alpha[t, i, j] * self.D[self.A[t, i, j - 1], self.A[t, i, j]] +
+        sum_distances = gp.quicksum(self.Alpha[t, i, j] * self.D[self.A[t, i, j - 1], self.A[t, i, j]] +
             self.Beta[t, i, j] * (self.D[self.A[t, i, j - 1], t] + self.D[t, self.A[t, i, j]])
-            for t in self.T for j in self.J for i in self.I
-        ), GRB.MINIMIZE)
+            for t in self.T for j in self.J for i in self.I)
+        sum_back_travel = gp.quicksum(self.S[t, i] * self.D[t, self.A[t, i, len(self.T) - 1]] for t in self.T for i in self.I)
+        self.model.setObjective(sum_distances + sum_back_travel, GRB.MINIMIZE)
 
     def _build_constraints(self):
         # (0) \sum_{i=1}^m s_{\vec a_{t,i}} = 1
@@ -173,11 +164,11 @@ class ExactMethod:
         )
 
         # (9) ∑_{j=1}^{n-u} ∑_{k=0}^{u-1} y_{t, j+k} ≥ 1
-        self.model.addConstrs(
-            (gp.quicksum(self.Y[t, j + k] for j in range(1, self.n - self.ub + 1) for k in range(self.ub)) >= 1
-             for t in self.T),
-            name="max_away"
-        )
+        # self.model.addConstrs(
+        #     (gp.quicksum(self.Y[t, j + k] for j in range(1, self.n - self.ub + 1) for k in range(self.ub)) >= 1
+        #      for t in self.T),
+        #     name="max_away"
+        # )
 
         # (10) ∑_{j=0}^{n-1} h_{t,j} = n - 1
         self.model.addConstrs(
@@ -374,7 +365,6 @@ class ExactMethod:
             self.gurobi_options = {}
         with gp.Env(params=self.gurobi_options) as env:
             self.model = gp.Model("TTP", env=env)
-            self._build_patterns()
             self._build_variables()
             self._build_decision_variables()
             self._build_objective()
