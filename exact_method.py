@@ -226,6 +226,149 @@ class ExactMethod:
                     row.append(self.instance.teams[self.schedule[t, j]])
             print(" | ".join(row))
 
+    def validity_of_schedules(self, patterns_per_team = None):
+        """
+        Orchestrator for Section 2.1.4.
+        Requires: self.A, self.S, self.H, self.T, self.n built already.
+        Creates: self.r_pos, self.q, self.w_and, self.delta
+        Adds constraints: (13)–(23)
+        """
+        self._init_sets(patterns_per_team)
+        self._build_tournament_variables()
+
+        self._add_r_constraints()         # (13)–(15)
+        self._add_q_constraints()         # (16)–(17)
+        self._add_and_constraints()       # (18)
+        self._add_delta_mapping()         # (19)
+        self._add_tournament_constraints()# (20)–(23)
+        
+    def _init_sets(self, patterns_per_team=None):
+        self.Rounds = list(range(1, 2 * (self.n - 1) + 1))  
+        self.AwayPositions = list(range(1, self.n))         
+
+        if patterns_per_team is None:
+            I_all = list(range(self.A.shape[1]))
+            self.I_map = {t: I_all for t in self.T}
+        else:
+            self.I_map = {t: list(patterns_per_team[t]) for t in self.T}   
+
+    def _build_tournament_variables(self):
+
+        # (13)–(17): r and q
+        self.r_pos = self.model.addVars(self.T, self.AwayPositions, vtype=GRB.CONTINUOUS, name="r")
+        self.q     = self.model.addVars(self.T, self.AwayPositions, self.Rounds, vtype=GRB.BINARY, name="q")
+
+        # (18): w = S AND q
+        self.w_and = gp.tupledict()
+        for t in self.T:
+            for i in self.I_map[t]:
+                for j in self.AwayPositions:
+                    for rnd in self.Rounds:
+                        self.w_and[t, i, j, rnd] = self.model.addVar(vtype=GRB.BINARY, name=f"w[{t},{i},{j},{rnd}]")
+
+        # (19)–(23): delta (away-at)
+        self.delta = self.model.addVars(self.T, self.T, self.Rounds, vtype=GRB.BINARY, name="delta")
+
+        self.model.update()
+
+    def _add_r_constraints(self):
+        # (13) r_{t,1} = 1 + h_{t,0}
+        self.model.addConstrs((self.r_pos[t, 1] == 1 + self.H[t, 0] for t in self.T), name="c13")
+
+        # (14) r_{t,j+1} = r_{t,j} + 1 + h_{t,j}  for j=1..n-2
+        if self.n >= 3:
+            self.model.addConstrs(
+                (self.r_pos[t, j+1] == self.r_pos[t, j] + 1 + self.H[t, j]
+                for t in self.T for j in range(1, self.n - 1)),
+                name="c14"
+            )
+
+        # (15) bounds
+        self.model.addConstrs((self.r_pos[t, 1] >= 1 for t in self.T), name="c15_lower")
+        self.model.addConstrs((self.r_pos[t, self.n - 1] <= 2 * (self.n - 1) for t in self.T), name="c15_upper")
+
+
+    def _add_q_constraints(self):
+        # (16) 
+        self.model.addConstrs(
+            (gp.quicksum(self.q[t, j, rnd] for rnd in self.Rounds) == 1
+            for t in self.T for j in self.AwayPositions),
+            name="c16"
+        )
+        # (17) 
+        self.model.addConstrs(
+            (gp.quicksum(rnd * self.q[t, j, rnd] for rnd in self.Rounds) == self.r_pos[t, j]
+            for t in self.T for j in self.AwayPositions),
+            name="c17"
+        )
+
+    def _add_and_constraints(self):
+        # (18) w = S AND q
+        for t in self.T:
+            for i in self.I_map[t]:
+                for j in self.AwayPositions:
+                    for rnd in self.Rounds:
+                        self.model.addConstr(self.w_and[t, i, j, rnd] <= self.S[t, i],        name=f"c18a[{t},{i},{j},{rnd}]")
+                        self.model.addConstr(self.w_and[t, i, j, rnd] <= self.q[t, j, rnd],    name=f"c18b[{t},{i},{j},{rnd}]")
+                        self.model.addConstr(self.w_and[t, i, j, rnd] >= self.S[t, i] + self.q[t, j, rnd] - 1,
+                                            name=f"c18c[{t},{i},{j},{rnd}]")
+
+    def _opponent_at(self, t: int, i: int, j: int) -> int:
+        # A[t,i,0]=t and A[t,i,n]=t 
+        return int(self.A[t, i, j])
+
+    def _add_delta_mapping(self):
+        # (19)  delta_{t,t',r} = sum_{i} sum_{j: a_{t,i,j}=t'} w_{t,i,j,r}
+        for t in self.T:
+            for t2 in self.T:
+                if t == t2:
+                    continue
+                for rnd in self.Rounds:
+                    self.model.addConstr(
+                        self.delta[t, t2, rnd] == gp.quicksum(
+                            self.w_and[t, i, j, rnd]
+                            for i in self.I_map[t]
+                            for j in self.AwayPositions
+                            if self._opponent_at(t, i, j) == t2
+                        ),
+                        name=f"c19[{t},{t2},{rnd}]"
+                    )
+
+    def _add_tournament_constraints(self):
+        # (20) one game per round per team
+        self.model.addConstrs(
+            (gp.quicksum(self.delta[t, t2, rnd] + self.delta[t2, t, rnd] for t2 in self.T if t2 != t) == 1
+            for t in self.T for rnd in self.Rounds),
+            name="c20"
+        )
+        # (21) double round-robin (once away, once home)
+        self.model.addConstrs(
+            (gp.quicksum(self.delta[t, t2, rnd] for rnd in self.Rounds) == 1
+            for t in self.T for t2 in self.T if t2 != t),
+            name="c21a"
+        )
+        self.model.addConstrs(
+            (gp.quicksum(self.delta[t2, t, rnd] for rnd in self.Rounds) == 1
+            for t in self.T for t2 in self.T if t2 != t),
+            name="c21b"
+        )
+        # (22) no immediate rematch
+        if len(self.Rounds) >= 2:
+            self.model.addConstrs(
+                ((self.delta[t, t2, rnd] + self.delta[t2, t, rnd]) +
+                (self.delta[t, t2, rnd + 1] + self.delta[t2, t, rnd + 1]) <= 1
+                for t in self.T for t2 in self.T if t2 != t for rnd in self.Rounds[:-1]),
+                name="c22"
+            )
+        # (23) no self matches
+        self.model.addConstrs(
+            (self.delta[t, t, rnd] == 0 for t in self.T for rnd in self.Rounds),
+            name="c23"
+        )
+
+
+
+
     def solve(self):
         if not hasattr(self, "gurobi_options"):
             self.gurobi_options = {}
