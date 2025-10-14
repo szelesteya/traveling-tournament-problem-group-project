@@ -6,35 +6,21 @@ import itertools
 import numpy as np
 import sys
 
+PATTERNS_PER_TEAM_DEFAULT = 6
+RANDOM_SEED_DEFAULT = 42
+
 
 def setup_gurobi_options(lic_content: str) -> dict[str, str]:
-    lines = lic_content.strip().split("\n")
-
-    wls_access_prefix = "WLSACCESSID="
-    wls_access_id = [
-        line[len(wls_access_prefix) :]
-        for line in lines
-        if line.startswith(wls_access_prefix)
-    ][0]
-
-    wls_secret_prefix = "WLSSECRET="
-    wls_secret = [
-        line[len(wls_access_prefix) :]
-        for line in lines
-        if line.startswith(wls_secret_prefix)
-    ][0]
-
-    license_id_prefix = "LICENSEID="
-    license_id = [
-        int(line[len(license_id_prefix) :])
-        for line in lines
-        if line.startswith(license_id_prefix)
-    ][0]
+    params = {}
+    for line in lic_content.strip().split("\n"):
+        if "=" in line:
+            key, value = line.split("=", 1)
+            params[key] = int(value) if key == "LICENSEID" else value
 
     return {
-        "WLSACCESSID": wls_access_id,
-        "WLSSECRET": wls_secret,
-        "LICENSEID": license_id,
+        "WLSACCESSID": params["WLSACCESSID"],
+        "WLSSECRET": params["WLSSECRET"],
+        "LICENSEID": params["LICENSEID"],
     }
 
 
@@ -56,14 +42,45 @@ class ExactMethod:
         self.ub = self.instance.upper_bound
 
     @property
-    def I(self):
+    def I(self):  # noqa: E743 ambiguous function name
         if not hasattr(self, "A"):
             raise AttributeError("Patterns have not been built yet.")
         return range(len(self.A[0]))  # Number of patterns per team
 
-    def _build_patterns(self, no_patterns_per_team: int = 5):
-        all_patterns = np.array([list(perm) for perm in itertools.permutations(self.T)])
+    def _add_optimal_patterns(self, sampled: np.ndarray, n):
+        if n == 4:
+            optimal_patterns = np.array(
+                [[[0, 2, 1, 3]], [[1, 0, 2, 3]], [[2, 0, 3, 1]], [[3, 1, 2, 0]]]
+            )
+        if n == 6:
+            optimal_patterns = np.array(
+                [
+                    [0, 2, 3, 5, 1, 4],
+                    [1, 5, 0, 4, 2, 3],
+                    [2, 3, 5, 0, 4, 1],
+                    [3, 5, 2, 1, 0, 4],
+                    [4, 0, 2, 1, 3, 5],
+                    [5, 0, 4, 1, 2, 3],
+                ],
+                dtype=int,
+            )
+        if n == 8:
+            # TODO: Add optimal patterns for n=8
+            return sampled
 
+        # Overwrite one sampled pattern per start team with the desired away order
+        # Keep shapes consistent: sampled has shape (n_teams, patterns_per_team, n_teams)
+        for pattern in optimal_patterns:
+            start_team = pattern[0]
+            sampled[start_team, 0, :] = pattern
+        return sampled
+
+    def _build_patterns(
+        self,
+        no_patterns_per_team: int = PATTERNS_PER_TEAM_DEFAULT,
+        random_seed: int = RANDOM_SEED_DEFAULT,
+    ):
+        all_patterns = np.array([list(perm) for perm in itertools.permutations(self.T)])
         # Get unique starting values (first elements)
         unique_starts = np.unique(all_patterns[:, 0])
 
@@ -72,12 +89,25 @@ class ExactMethod:
             all_patterns[all_patterns[:, 0] == start] for start in unique_starts
         ]
         grouped_patterns = np.array(grouped_patterns, dtype=int)
-        max_patterns = min(len(grouped_patterns[0]), no_patterns_per_team)
-        sampled = grouped_patterns[:, :max_patterns]
+
+        # Determine how many patterns to sample per team (per start group)
+        max_patterns = min(grouped_patterns.shape[1], no_patterns_per_team)
+
+        # Randomly sample patterns per group with the provided seed
+        rng = np.random.default_rng(random_seed)
+        if grouped_patterns.shape[1] == max_patterns:
+            sampled = grouped_patterns
+        else:
+            sampled_list = []
+            for group in grouped_patterns:
+                indices = rng.choice(group.shape[0], size=max_patterns, replace=False)
+                sampled_list.append(group[indices])
+            sampled = np.stack(sampled_list, axis=0)
+
+        # Add optimal patterns to the sampled patterns
+        sampled = self._add_optimal_patterns(sampled, self.n)
+
         self.A = sampled
-        # self.A = np.array(
-        #     [[[0, 2, 1, 3]], [[1, 0, 2, 3]], [[2, 0, 3, 1]], [[3, 1, 2, 0]]]
-        # )
 
     def _build_distances(self):
         self.D = np.zeros((self.n, self.n))
@@ -129,13 +159,13 @@ class ExactMethod:
         self.model.setObjective(sum_distances + sum_back_travel, GRB.MINIMIZE)
 
     def _build_constraints(self):
-        # (0) \sum_{i=1}^m s_{\vec a_{t,i}} = 1
+        # (1) \sum_{i=1}^m s_{\vec a_{t,i}} = 1
         self.model.addConstrs(
             (gp.quicksum(self.S[t, i] for i in self.I) == 1 for t in self.T),
             name="one_pattern_per_team",
         )
 
-        # (1)–(3) gamma = s AND y_{t,j-1} for j=1..n-1
+        # (2) gamma = s AND y_{t,j-1} for j=1..n-1
         self.model.addConstrs(
             (
                 self.Gamma[t, i, j] <= self.Y[t, j - 1]
@@ -166,31 +196,31 @@ class ExactMethod:
             name="gamma_ge_s_plus_y_minus_1",
         )
 
-        # (7) h_{t, j} ≤ y_{t, j} * M
+        # (3) h_{t, j} ≤ y_{t, j} * M
         self.model.addConstrs(
             (self.H[t, j] <= self.Y[t, j] * self.ub for t in self.T for j in self.J),
             name="home_le_yM",
         )
 
-        # (8) h_{t, j} - y_{t, j} ≥ 0
+        # (4) h_{t, j} - y_{t, j} ≥ 0
         self.model.addConstrs(
             (self.H[t, j] - self.Y[t, j] >= 0 for t in self.T for j in self.J),
             name="h_minus_y_ge_0",
         )
 
-        # # (9) ∑_{j=1}^{n-u} ∑_{k=0}^{u-1} y_{t, j+k} ≥ 1
-        # self.model.addConstrs(
-        #     (
-        #         gp.quicksum(
-        #             self.Y[t, j + k]
-        #             for j in range(1, self.n - self.ub + 1)
-        #             for k in range(self.ub)
-        #         )
-        #         >= 1
-        #         for t in self.T
-        #     ),
-        #     name="max_away",
-        # )
+        # (5) ∑_{j=0}^{n-1-u} ∑_{k=0}^{u} y_{t, j+k} ≥ 1
+        self.model.addConstrs(
+            (
+                gp.quicksum(
+                    self.Y[t, j + k]
+                    for j in range(0, self.n - self.ub)
+                    for k in range(self.ub + 1)
+                )
+                >= 1
+                for t in self.T
+            ),
+            name="max_away",
+        )
 
         # (10) ∑_{j=0}^{n-1} h_{t,j} = n - 1
         self.model.addConstrs(
@@ -266,14 +296,14 @@ class ExactMethod:
                     row.append(self.instance.teams[self.schedule[t, j]])
             print(" | ".join(row))
 
-    def validity_of_schedules(self, patterns_per_team=None):
+    def validity_of_schedules(self):
         """
         Orchestrator for Section 2.1.4.
         Requires: self.A, self.S, self.H, self.T, self.n built already.
         Creates: self.r_pos, self.q, self.w_and, self.delta
         Adds constraints: (13)–(23)
         """
-        self._init_sets(patterns_per_team)
+        self._init_sets()
         self._build_tournament_variables()
 
         self._add_r_constraints()  # (13)–(15)
@@ -282,19 +312,16 @@ class ExactMethod:
         self._add_delta_mapping()  # (19)
         self._add_tournament_constraints()  # (20)–(23)
 
-    def _init_sets(self, patterns_per_team=None):
+    def _init_sets(self):
         self.Rounds = list(range(1, 2 * (self.n - 1) + 1))
         self.AwayPositions = list(range(1, self.n))
 
-        if patterns_per_team is None:
-            I_all = list(range(self.A.shape[1]))
-            self.I_map = {t: I_all for t in self.T}
-        else:
-            self.I_map = {t: list(patterns_per_team[t]) for t in self.T}
+        I_all = list(range(self.A.shape[1]))
+        self.I_map = {t: I_all for t in self.T}
 
     def _build_tournament_variables(self):
 
-        # (13)–(17): r and q
+        # r and q
         self.r_pos = self.model.addVars(
             self.T, self.AwayPositions, vtype=GRB.CONTINUOUS, name="r"
         )
@@ -302,7 +329,7 @@ class ExactMethod:
             self.T, self.AwayPositions, self.Rounds, vtype=GRB.BINARY, name="q"
         )
 
-        # (18): w = S AND q
+        # w = S AND q
         self.w_and = gp.tupledict()
         for t in self.T:
             for i in self.I_map[t]:
@@ -312,7 +339,7 @@ class ExactMethod:
                             vtype=GRB.BINARY, name=f"w[{t},{i},{j},{rnd}]"
                         )
 
-        # (19)–(23): delta (away-at)
+        # delta (away-at)
         self.delta = self.model.addVars(
             self.T, self.T, self.Rounds, vtype=GRB.BINARY, name="delta"
         )
@@ -320,9 +347,9 @@ class ExactMethod:
         self.model.update()
 
     def _add_r_constraints(self):
-        # (13) r_{t,1} = 1 + h_{t,0}
+        # (8) r_{t,1} = 1 + h_{t,0}
         self.model.addConstrs(
-            (self.r_pos[t, 1] == 1 + self.H[t, 0] for t in self.T), name="c13"
+            (self.r_pos[t, 1] == 1 + self.H[t, 0] for t in self.T), name="c8"
         )
 
         # (14) r_{t,j+1} = r_{t,j} + 1 + h_{t,j}  for j=1..n-2
@@ -333,18 +360,18 @@ class ExactMethod:
                     for t in self.T
                     for j in range(1, self.n - 1)
                 ),
-                name="c14",
+                name="c9",
             )
 
-        # (15) bounds
+        # (10) bounds
         self.model.addConstrs((self.r_pos[t, 1] >= 1 for t in self.T), name="c15_lower")
         self.model.addConstrs(
             (self.r_pos[t, self.n - 1] <= 2 * (self.n - 1) for t in self.T),
-            name="c15_upper",
+            name="c10_upper",
         )
 
     def _add_q_constraints(self):
-        # (16)
+        # (11)
         self.model.addConstrs(
             (
                 gp.quicksum(self.q[t, j, rnd] for rnd in self.Rounds) == 1
@@ -353,7 +380,7 @@ class ExactMethod:
             ),
             name="c16",
         )
-        # (17)
+        # (12)
         self.model.addConstrs(
             (
                 gp.quicksum(rnd * self.q[t, j, rnd] for rnd in self.Rounds)
@@ -361,11 +388,11 @@ class ExactMethod:
                 for t in self.T
                 for j in self.AwayPositions
             ),
-            name="c17",
+            name="c12",
         )
 
     def _add_and_constraints(self):
-        # (18) w = S AND q
+        # (13) w = S AND q
         for t in self.T:
             for i in self.I_map[t]:
                 for j in self.AwayPositions:
