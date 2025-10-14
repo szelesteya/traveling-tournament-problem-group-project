@@ -16,6 +16,12 @@ def parse_args():
         "xml_path",
         help="Path to the XML instance file, e.g., instances/NL4.xml"
     )
+    parser.add_argument(
+        "--trials",
+        type=int,
+        default=5,
+        help="Number of SA runs to perform (default: 5)"
+    )
     return parser.parse_args()
 
 def round_robin_pairings(n):
@@ -79,7 +85,7 @@ def build_double_round_robin(n):
     return rounds  # length 2*(n-1)
 
 
-def compute_travel_and_violations(rounds, n, D, max_consecutive, count_repeat=True):
+def compute_travel_and_violations(rounds, n, D, max_consecutive, count_repeat=True, check_mirror = True):
     """
     rounds: list of rounds; each round is list of matches (home, away)
     returns total_travel_cost, total_violations (sum of consecutive home/away > max_consecutive
@@ -94,8 +100,9 @@ def compute_travel_and_violations(rounds, n, D, max_consecutive, count_repeat=Tr
 
     total_travel = 0
     violations = 0
+    mirror_vio = 0
 
-    # --- detect repeating matches in consecutive rounds (A vs B in round r and again in r+1)
+    # detect repeating matches in consecutive rounds (A vs B in round r and again in r+1)
     if count_repeat:
         pairs_per_round = []
         for rnd in rounds:
@@ -108,6 +115,28 @@ def compute_travel_and_violations(rounds, n, D, max_consecutive, count_repeat=Tr
         violations += repeat_violations
     else:
         repeat_violations = 0
+
+    # check that second half mirrors first half with flipped home/away
+    if check_mirror:
+        m = len(rounds) // 2
+        if len(rounds) != 2 * m:
+            # odd number of rounds -> can't check strict mirror, skip or handle differently
+            pass
+        else:
+            # We'll compare round r with round r+m: expecting reversed ordered pairs
+            for r in range(m):
+                # build map of unordered->ordered for round r for quick lookup
+                first = {(h, a): (h, a) for (h, a) in rounds[r]}
+                # build set of ordered tuples in the mirrored round
+                second_ordered = set(rounds[r + m])
+                # For each ordered pair in first, we expect reversed pair in second_ordered
+                for (h, a) in rounds[r]:
+                    if (a, h) not in second_ordered:
+                        # if the reversed ordered pair is missing, count as a non-mirror violation
+                        violations += 1
+                        mirror_vio += 1
+
+
 
     # Per-team travel + consecutive home/away violations (existing behavior)
     for t in range(n):
@@ -212,9 +241,9 @@ def round_is_valid(round_matches):
 def simulated_annealing(initial, n, D, max_consec,
                         penalty_weight=10000,
                         T0=1000.0, cooling=0.995,
-                        iterations=20000, iter_per_temp=1):
+                        iterations=20000):
     best = copy.deepcopy(initial)
-    best_travel, best_viol = compute_travel_and_violations(best, n, D, max_consec)
+    best_travel, best_viol = compute_travel_and_violations(best, n, D, max_consec, check_mirror = True)
     best_score = best_travel + penalty_weight * best_viol
 
     cur = copy.deepcopy(best)
@@ -222,11 +251,14 @@ def simulated_annealing(initial, n, D, max_consec,
     cur_score = best_score
 
     T = T0
-
+    best_improvements = 0 
+    
     for it in range(iterations):
         cand = random_neighbor(cur)
-        cand_travel, cand_viol = compute_travel_and_violations(cand, n, D, max_consec)
-        cand_score = cand_travel + penalty_weight * cand_viol
+        cand_travel, cand_viol = compute_travel_and_violations(cand, n, D, max_consec, check_mirror= True)
+        # cand_score = cand_travel + penalty_weight * cand_viol
+        cand_score = math.sqrt(cand_travel**2 + (penalty_weight * cand_viol)**2)
+
 
         delta = cand_score - cur_score
         accept = False
@@ -244,10 +276,13 @@ def simulated_annealing(initial, n, D, max_consec,
                 best = copy.deepcopy(cur)
                 best_travel, best_viol = cur_travel, cur_viol
                 best_score = cur_score
+                best_improvements += 1
+
 
         # cooling
         T *= cooling
 
+    print(f"Number of times best improved: {best_improvements}")
     # final evaluation of best (might be infeasible if none feasible found)
     return best, best_travel, best_viol, best_score
 
@@ -266,7 +301,7 @@ def main():
     print(f"Teams: {n}, max consecutive home/away allowed ~ {max_consec}")
     print("Building initial double round-robin schedule...")
     initial = build_double_round_robin(n)
-    init_travel, init_viol = compute_travel_and_violations(initial, n, D, max_consec)
+    init_travel, init_viol = compute_travel_and_violations(initial, n, D, max_consec, check_mirror=True)
     init_score = init_travel + 10000 * init_viol
     print(f"Initial travel cost: {init_travel}, violations: {init_viol}, score: {init_score}\n")
     print_schedule(initial, team_names)
@@ -274,8 +309,8 @@ def main():
 
     best, best_travel, best_viol, best_score = simulated_annealing(
         initial, n, D, max_consec,
-        penalty_weight=100000,
-        T0=8000.0, cooling=0.99999, iterations=1000000
+        penalty_weight=10000,
+        T0=1000.0, cooling=0.99999, iterations=100000,
     )
 
     print("\n--- RESULT ---")
