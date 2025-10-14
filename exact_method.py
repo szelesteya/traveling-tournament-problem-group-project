@@ -6,7 +6,7 @@ import itertools
 import numpy as np
 import sys
 
-PATTERNS_PER_TEAM_DEFAULT = 6
+PATTERNS_PER_TEAM_DEFAULT = 7
 RANDOM_SEED_DEFAULT = 42
 
 
@@ -49,11 +49,12 @@ class ExactMethod:
 
     def _add_optimal_patterns(self, sampled: np.ndarray, n):
         if n == 4:
-            optimal_patterns = np.array(
+            """optimal_patterns = np.array(
                 [[[0, 2, 1, 3]], [[1, 0, 2, 3]], [[2, 0, 3, 1]], [[3, 1, 2, 0]]]
-            )
+            )"""
+            return sampled
         if n == 6:
-            optimal_patterns = np.array(
+            """optimal_patterns = np.array(
                 [
                     [0, 2, 3, 5, 1, 4],
                     [1, 5, 0, 4, 2, 3],
@@ -63,10 +64,24 @@ class ExactMethod:
                     [5, 0, 4, 1, 2, 3],
                 ],
                 dtype=int,
-            )
-        if n == 8:
-            # TODO: Add optimal patterns for n=8
+            )"""
             return sampled
+        if n == 8:
+            optimal_patterns = np.array(
+                [
+                    [0, 4, 6, 5, 7, 2, 1, 3],
+                    [1, 5, 6, 7, 4, 0, 3, 2],
+                    [2, 3, 7, 6, 5, 0, 4, 1],
+                    [3, 0, 4, 1, 7, 6, 5, 2],
+                    [4, 2, 1, 3, 5, 6, 7, 0],
+                    [5, 4, 0, 7, 6, 2, 1, 3],
+                    [6, 7, 2, 1, 3, 5, 4, 0],
+                    [7, 5, 3, 1, 2, 0, 4, 6]
+                    
+                ],
+                dtype=int,
+            )
+            #return sampled
 
         # Overwrite one sampled pattern per start team with the desired away order
         # Keep shapes consistent: sampled has shape (n_teams, patterns_per_team, n_teams)
