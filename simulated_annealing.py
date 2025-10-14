@@ -138,30 +138,53 @@ def compute_travel_and_violations(rounds, n, D, max_consecutive, count_repeat=Tr
 
 
 
-    # Per-team travel + consecutive home/away violations (existing behavior)
+       # --- Per-team: compute consecutive H/A violations and (fixed) travel distance
     for t in range(n):
-        cur_loc = t  # start at home city index
-        consecutive_home = 0
-        consecutive_away = 0
+        consec_home = 0
+        consec_away = 0
+        # If you want "one violation per streak" instead of "per game after threshold",
+        # uncomment the *_counted flags and the alternative increments below.
+        # home_streak_counted = False
+        # away_streak_counted = False
+
+        # Build venue sequence for accurate travel (home venue = team index, away venue = opponent index)
+        venues = []
+
         for opp, at_home in seq[t]:
             if at_home:
-                cur_loc = t
-                consecutive_home += 1
-                consecutive_away = 0
+                venues.append(t)
+                consec_home += 1
+                consec_away = 0
+                # away_streak_counted = False
+                if (max_consecutive is not None) and (consec_home > max_consecutive):
+                    violations += 1
+                # One-per-streak alternative:
+                # if (max_consecutive is not None) and (consec_home > max_consecutive) and not home_streak_counted:
+                #     violations += 1
+                #     home_streak_counted = True
             else:
-                total_travel += D[cur_loc, opp]
-                cur_loc = opp
-                consecutive_away += 1
-                consecutive_home = 0
-            # violations counting (per-game style)
-            if consecutive_home > max_consecutive:
-                violations += 1
-            if consecutive_away > max_consecutive:
-                violations += 1
-        # return to home at end
-        if cur_loc != t:
-            total_travel += D[cur_loc, t]
+                venues.append(opp)
+                consec_away += 1
+                consec_home = 0
+                # home_streak_counted = False
+                if (max_consecutive is not None) and (consec_away > max_consecutive):
+                    violations += 1
+                # One-per-streak alternative:
+                # if (max_consecutive is not None) and (consec_away > max_consecutive) and not away_streak_counted:
+                #     violations += 1
+                #     away_streak_counted = True
 
+        # --- Correct travel computation:
+        # Start at home (t), go to each game venue in order, then return home.
+        cur = t
+        for v in venues:
+            total_travel += D[cur, v]
+            cur = v
+        total_travel += D[cur, t]
+
+    # Optionally return components if you later want to weight them differently:
+    # return total_travel, violations, repeat_violations, mirror_vio
+    return total_travel, violations
     # Optionally, you can return repeat_violations separately if you want more details:
     # return total_travel, violations, repeat_violations
     return total_travel, violations
@@ -256,8 +279,8 @@ def simulated_annealing(initial, n, D, max_consec,
     for it in range(iterations):
         cand = random_neighbor(cur)
         cand_travel, cand_viol = compute_travel_and_violations(cand, n, D, max_consec, check_mirror= True)
-        # cand_score = cand_travel + penalty_weight * cand_viol
-        cand_score = math.sqrt(cand_travel**2 + (penalty_weight * cand_viol)**2)
+        cand_score = cand_travel + penalty_weight * cand_viol
+        # cand_score = math.sqrt(cand_travel**2 + (penalty_weight * cand_viol)**2)
 
 
         delta = cand_score - cur_score
