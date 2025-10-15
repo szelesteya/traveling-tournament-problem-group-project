@@ -25,11 +25,8 @@ def parse_args():
     return parser.parse_args()
 
 def round_robin_pairings(n):
-    """
-    Return list of rounds; each round is list of pairs (a,b) (undirected).
-    Uses circle method; expects even n. If n odd, normally add a dummy team.
-    """
-    assert n % 2 == 0, "Round-robin generator expects even number of teams"
+    #Round-robin generator expects even number of teams
+    assert n % 2 == 0 
     teams = list(range(n))
     rounds = []
     for r in range(n - 1): 
@@ -51,11 +48,7 @@ def round_robin_pairings(n):
 
 
 def build_double_round_robin(n):
-    """
-    Construct a double round-robin schedule as list of rounds.
-    For the second half we mirror opponents and swap home/away.
-    Representation: rounds is a list; each round is list of matches (home, away)
-    """
+
     first_half = round_robin_pairings(n)  # (n-1) rounds
     rounds = []
     # initial home/away assignment: alternate to try some balance
@@ -86,11 +79,7 @@ def build_double_round_robin(n):
 
 
 def compute_travel_and_violations(rounds, n, D, max_consecutive, count_repeat=True, check_mirror = True):
-    """
-    rounds: list of rounds; each round is list of matches (home, away)
-    returns total_travel_cost, total_violations (sum of consecutive home/away > max_consecutive
-    plus repeat-match violations if count_repeat=True)
-    """
+
     # Build per-team sequence of (opponent, is_home)
     seq = {t: [] for t in range(n)}
     for rnd in rounds:
@@ -138,15 +127,11 @@ def compute_travel_and_violations(rounds, n, D, max_consecutive, count_repeat=Tr
 
 
 
-       # --- Per-team: compute consecutive H/A violations and (fixed) travel distance
+       # Per-team: compute consecutive H/A violations and (fixed) travel distance
     for t in range(n):
         consec_home = 0
         consec_away = 0
-        # If you want "one violation per streak" instead of "per game after threshold",
-        # uncomment the *_counted flags and the alternative increments below.
-        # home_streak_counted = False
-        # away_streak_counted = False
-
+      
         # Build venue sequence for accurate travel (home venue = team index, away venue = opponent index)
         venues = []
 
@@ -155,26 +140,16 @@ def compute_travel_and_violations(rounds, n, D, max_consecutive, count_repeat=Tr
                 venues.append(t)
                 consec_home += 1
                 consec_away = 0
-                # away_streak_counted = False
                 if (max_consecutive is not None) and (consec_home > max_consecutive):
                     violations += 1
-                # One-per-streak alternative:
-                # if (max_consecutive is not None) and (consec_home > max_consecutive) and not home_streak_counted:
-                #     violations += 1
-                #     home_streak_counted = True
+
             else:
                 venues.append(opp)
                 consec_away += 1
                 consec_home = 0
-                # home_streak_counted = False
                 if (max_consecutive is not None) and (consec_away > max_consecutive):
                     violations += 1
-                # One-per-streak alternative:
-                # if (max_consecutive is not None) and (consec_away > max_consecutive) and not away_streak_counted:
-                #     violations += 1
-                #     away_streak_counted = True
 
-        # --- Correct travel computation:
         # Start at home (t), go to each game venue in order, then return home.
         cur = t
         for v in venues:
@@ -185,9 +160,7 @@ def compute_travel_and_violations(rounds, n, D, max_consecutive, count_repeat=Tr
     # Optionally return components if you later want to weight them differently:
     # return total_travel, violations, repeat_violations, mirror_vio
     return total_travel, violations
-    # Optionally, you can return repeat_violations separately if you want more details:
-    # return total_travel, violations, repeat_violations
-    return total_travel, violations
+
 
 # helper function
 def schedule_to_team_sequences(rounds, n):
@@ -209,14 +182,6 @@ def print_schedule(rounds, team_names):
 # By trying many neighbors, the algorithm explores the search space and hopefully 
 # finds one with lower travel distance or fewer violations
 def random_neighbor(rounds):
-    """
-    Return a neighbor schedule by applying one of several moves:
-     - swap two matches' opponents between rounds (swap opponent partner)
-     - swap home/away of a random match
-     - swap entire rounds
-    This implementation tries to keep validity (no self match) but does not always guarantee feasibility.
-    We'll repair trivial self-matches (shouldn't occur with these moves).
-    """
     s = copy.deepcopy(rounds)
     n_rounds = len(s)
     # choose move type
@@ -279,8 +244,8 @@ def simulated_annealing(initial, n, D, max_consec,
     for it in range(iterations):
         cand = random_neighbor(cur)
         cand_travel, cand_viol = compute_travel_and_violations(cand, n, D, max_consec, check_mirror= True)
-        cand_score = cand_travel + penalty_weight * cand_viol
-        # cand_score = math.sqrt(cand_travel**2 + (penalty_weight * cand_viol)**2)
+        cand_score = cand_travel + penalty_weight * cand_viol # Linear Penalty
+        # cand_score = math.sqrt(cand_travel**2 + (penalty_weight * cand_viol)**2) # Euclidean Penalty
 
 
         delta = cand_score - cur_score
@@ -311,6 +276,8 @@ def simulated_annealing(initial, n, D, max_consec,
 
 
 def main():
+    # Collect variables from instances
+    
     args = parse_args()
     XML_PATH = args.xml_path
 
@@ -328,7 +295,7 @@ def main():
     init_score = init_travel + 10000 * init_viol
     print(f"Initial travel cost: {init_travel}, violations: {init_viol}, score: {init_score}\n")
     print_schedule(initial, team_names)
-    print("\nRunning Simulated Annealing ... (this may take a little time)\n")
+    print("\nRunning Simulated Annealing ... \n")
 
     best, best_travel, best_viol, best_score = simulated_annealing(
         initial, n, D, max_consec,

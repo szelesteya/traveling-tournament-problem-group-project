@@ -4,6 +4,8 @@ import numpy as np
 import argparse
 
 def run_experiments(instance,num_trials):
+    # Collect variables from instances 
+    
     XML_PATH = instance
 
     loader = Loader(XML_PATH)
