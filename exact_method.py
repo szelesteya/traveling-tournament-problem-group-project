@@ -6,7 +6,8 @@ import itertools
 import numpy as np
 import sys
 
-PATTERNS_PER_TEAM_DEFAULT = 7
+ADD_OPTIMAL_PATTERNS = False
+PATTERNS_PER_TEAM_DEFAULT = 2
 RANDOM_SEED_DEFAULT = 42
 
 
@@ -49,12 +50,12 @@ class ExactMethod:
 
     def _add_optimal_patterns(self, sampled: np.ndarray, n):
         if n == 4:
-            """optimal_patterns = np.array(
+            optimal_patterns = np.array(
                 [[[0, 2, 1, 3]], [[1, 0, 2, 3]], [[2, 0, 3, 1]], [[3, 1, 2, 0]]]
-            )"""
+            )
             return sampled
         if n == 6:
-            """optimal_patterns = np.array(
+            optimal_patterns = np.array(
                 [
                     [0, 2, 3, 5, 1, 4],
                     [1, 5, 0, 4, 2, 3],
@@ -64,7 +65,7 @@ class ExactMethod:
                     [5, 0, 4, 1, 2, 3],
                 ],
                 dtype=int,
-            )"""
+            )
             return sampled
         if n == 8:
             optimal_patterns = np.array(
@@ -76,12 +77,11 @@ class ExactMethod:
                     [4, 2, 1, 3, 5, 6, 7, 0],
                     [5, 4, 0, 7, 6, 2, 1, 3],
                     [6, 7, 2, 1, 3, 5, 4, 0],
-                    [7, 5, 3, 1, 2, 0, 4, 6]
-                    
+                    [7, 5, 3, 1, 2, 0, 4, 6],
                 ],
                 dtype=int,
             )
-            #return sampled
+            # return sampled
 
         # Overwrite one sampled pattern per start team with the desired away order
         # Keep shapes consistent: sampled has shape (n_teams, patterns_per_team, n_teams)
@@ -120,7 +120,8 @@ class ExactMethod:
             sampled = np.stack(sampled_list, axis=0)
 
         # Add optimal patterns to the sampled patterns
-        sampled = self._add_optimal_patterns(sampled, self.n)
+        if ADD_OPTIMAL_PATTERNS:
+            sampled = self._add_optimal_patterns(sampled, self.n)
 
         self.A = sampled
 
@@ -316,16 +317,16 @@ class ExactMethod:
         Orchestrator for Section 2.1.4.
         Requires: self.A, self.S, self.H, self.T, self.n built already.
         Creates: self.r_pos, self.q, self.w_and, self.delta
-        Adds constraints: (13)–(23)
+        Adds constraints: (8)–(18)
         """
         self._init_sets()
         self._build_tournament_variables()
 
-        self._add_r_constraints()  # (13)–(15)
-        self._add_q_constraints()  # (16)–(17)
-        self._add_and_constraints()  # (18)
-        self._add_delta_mapping()  # (19)
-        self._add_tournament_constraints()  # (20)–(23)
+        self._add_r_constraints()
+        self._add_q_constraints()
+        self._add_and_constraints()
+        self._add_delta_mapping()
+        self._add_tournament_constraints()
 
     def _init_sets(self):
         self.Rounds = list(range(1, 2 * (self.n - 1) + 1))
@@ -393,7 +394,7 @@ class ExactMethod:
                 for t in self.T
                 for j in self.AwayPositions
             ),
-            name="c16",
+            name="c11",
         )
         # (12)
         self.model.addConstrs(
@@ -414,16 +415,16 @@ class ExactMethod:
                     for rnd in self.Rounds:
                         self.model.addConstr(
                             self.w_and[t, i, j, rnd] <= self.S[t, i],
-                            name=f"c18a[{t},{i},{j},{rnd}]",
+                            name=f"c13a[{t},{i},{j},{rnd}]",
                         )
                         self.model.addConstr(
                             self.w_and[t, i, j, rnd] <= self.q[t, j, rnd],
-                            name=f"c18b[{t},{i},{j},{rnd}]",
+                            name=f"c13b[{t},{i},{j},{rnd}]",
                         )
                         self.model.addConstr(
                             self.w_and[t, i, j, rnd]
                             >= self.S[t, i] + self.q[t, j, rnd] - 1,
-                            name=f"c18c[{t},{i},{j},{rnd}]",
+                            name=f"c13c[{t},{i},{j},{rnd}]",
                         )
 
     def _opponent_at(self, t: int, i: int, j: int) -> int:
@@ -431,7 +432,7 @@ class ExactMethod:
         return int(self.A[t, i, j])
 
     def _add_delta_mapping(self):
-        # (19)  delta_{t,t',r} = sum_{i} sum_{j: a_{t,i,j}=t'} w_{t,i,j,r}
+        # (14)  delta_{t,t',r} = sum_{i} sum_{j: a_{t,i,j}=t'} w_{t,i,j,r}
         for t in self.T:
             for t2 in self.T:
                 if t == t2:
@@ -445,11 +446,11 @@ class ExactMethod:
                             for j in self.AwayPositions
                             if self._opponent_at(t, i, j) == t2
                         ),
-                        name=f"c19[{t},{t2},{rnd}]",
+                        name=f"c14[{t},{t2},{rnd}]",
                     )
 
     def _add_tournament_constraints(self):
-        # (20) one game per round per team
+        # (15) one game per round per team
         self.model.addConstrs(
             (
                 gp.quicksum(
@@ -461,9 +462,9 @@ class ExactMethod:
                 for t in self.T
                 for rnd in self.Rounds
             ),
-            name="c20",
+            name="c15",
         )
-        # (21) double round-robin (once away, once home) – combined per unordered pair
+        # (16) double round-robin (once away, once home) – combined per unordered pair
         self.model.addConstrs(
             (
                 gp.quicksum(
@@ -475,9 +476,9 @@ class ExactMethod:
                 for t2 in self.T
                 if t2 > t
             ),
-            name="c21",
+            name="c16",
         )
-        # (22) no immediate rematch
+        # (17) no immediate rematch
         if len(self.Rounds) >= 2:
             self.model.addConstrs(
                 (
@@ -489,12 +490,12 @@ class ExactMethod:
                     if t2 > t
                     for rnd in self.Rounds[:-1]
                 ),
-                name="c22",
+                name="c17",
             )
-        # (23) no self matches
+        # (18) no self matches
         self.model.addConstrs(
             (self.delta[t, t, rnd] == 0 for t in self.T for rnd in self.Rounds),
-            name="c23",
+            name="c18",
         )
 
     def solve(self):
@@ -520,13 +521,14 @@ class ExactMethod:
             for v in self.model.getVars():
                 if v.X > 0.1:  # Only print variables that are set to 1
                     print(f"{v.VarName}: {v.X}")
+            self._build_schedule()
+            self.print_summary()
         elif self.model.status == GRB.INFEASIBLE:
             print("Model is infeasible")
         elif self.model.status == GRB.UNBOUNDED:
             print("Model is unbounded")
         else:
             print(f"Optimization ended with status {self.model.status}")
-        self._build_schedule()
 
 
 if __name__ == "__main__":
