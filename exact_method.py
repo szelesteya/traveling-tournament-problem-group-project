@@ -5,10 +5,15 @@ from gurobipy import GRB
 import itertools
 import numpy as np
 import sys
+import argparse
 
-ADD_OPTIMAL_PATTERNS = False
-PATTERNS_PER_TEAM_DEFAULT = 2
-RANDOM_SEED_DEFAULT = 42
+INSTANCE_FILE_DEFAULT = "instances/NL4.xml"  # --instance [FILE]
+ADD_OPTIMAL_PATTERNS_DEFAULT = False  # --add-optimal-patterns
+PATTERNS_PER_TEAM_DEFAULT = 6  # --patterns-per-team [NUMBER]
+RANDOM_SEED_DEFAULT = 42  # --random-seed [NUMBER]
+LOWER_BOUND_DEFAULT = 1  # --lower-bound [NUMBER]
+UPPER_BOUND_DEFAULT = 3  # --upper-bound [NUMBER]
+GUROBI_LICENSE_FILE_DEFAULT = None  # --gurobi-license [FILE]
 
 
 def setup_gurobi_options(lic_content: str) -> dict[str, str]:
@@ -33,7 +38,14 @@ class ExactMethod:
     A: np.ndarray
     D: np.ndarray
 
-    def __init__(self, ttp_instance: Instance, gurobi_lic: str = None):
+    def __init__(
+        self,
+        ttp_instance: Instance,
+        gurobi_lic: str = None,
+        add_optimal_patterns: bool = ADD_OPTIMAL_PATTERNS_DEFAULT,
+        patterns_per_team: int = PATTERNS_PER_TEAM_DEFAULT,
+        random_seed: int = RANDOM_SEED_DEFAULT,
+    ):
         if gurobi_lic is not None:
             self.gurobi_options = setup_gurobi_options(gurobi_lic)
         self.instance = ttp_instance
@@ -41,6 +53,9 @@ class ExactMethod:
         self.T = range(len(self.instance.teams))
         self.lb = self.instance.lower_bound
         self.ub = self.instance.upper_bound
+        self.add_optimal_patterns = add_optimal_patterns
+        self.patterns_per_team = patterns_per_team
+        self.random_seed = random_seed
 
     @property
     def I(self):  # noqa: E743 ambiguous function name
@@ -90,11 +105,7 @@ class ExactMethod:
             sampled[start_team, 0, :] = pattern
         return sampled
 
-    def _build_patterns(
-        self,
-        no_patterns_per_team: int = PATTERNS_PER_TEAM_DEFAULT,
-        random_seed: int = RANDOM_SEED_DEFAULT,
-    ):
+    def _build_patterns(self):
         all_patterns = np.array([list(perm) for perm in itertools.permutations(self.T)])
         # Get unique starting values (first elements)
         unique_starts = np.unique(all_patterns[:, 0])
@@ -106,10 +117,10 @@ class ExactMethod:
         grouped_patterns = np.array(grouped_patterns, dtype=int)
 
         # Determine how many patterns to sample per team (per start group)
-        max_patterns = min(grouped_patterns.shape[1], no_patterns_per_team)
+        max_patterns = min(grouped_patterns.shape[1], self.patterns_per_team)
 
         # Randomly sample patterns per group with the provided seed
-        rng = np.random.default_rng(random_seed)
+        rng = np.random.default_rng(self.random_seed)
         if grouped_patterns.shape[1] == max_patterns:
             sampled = grouped_patterns
         else:
@@ -120,7 +131,7 @@ class ExactMethod:
             sampled = np.stack(sampled_list, axis=0)
 
         # Add optimal patterns to the sampled patterns
-        if ADD_OPTIMAL_PATTERNS:
+        if self.add_optimal_patterns:
             sampled = self._add_optimal_patterns(sampled, self.n)
 
         self.A = sampled
@@ -521,8 +532,6 @@ class ExactMethod:
             for v in self.model.getVars():
                 if v.X > 0.1:  # Only print variables that are set to 1
                     print(f"{v.VarName}: {v.X}")
-            self._build_schedule()
-            self.print_summary()
         elif self.model.status == GRB.INFEASIBLE:
             print("Model is infeasible")
         elif self.model.status == GRB.UNBOUNDED:
@@ -531,21 +540,79 @@ class ExactMethod:
             print(f"Optimization ended with status {self.model.status}")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Exact method solver for TTP")
+    parser.add_argument(
+        "--instance",
+        "-i",
+        default=INSTANCE_FILE_DEFAULT,
+        help="Path to XML instance file (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--gurobi-license",
+        "-g",
+        default=GUROBI_LICENSE_FILE_DEFAULT,
+        help="Path to Gurobi WLS license file (optional)",
+    )
+    parser.add_argument(
+        "--add-optimal-patterns",
+        action="store_true",
+        default=ADD_OPTIMAL_PATTERNS_DEFAULT,
+        help="Force-inject known optimal patterns when available",
+    )
+    parser.add_argument(
+        "--patterns-per-team",
+        type=int,
+        default=PATTERNS_PER_TEAM_DEFAULT,
+        help="Number of sampled patterns per starting team (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--random-seed",
+        type=int,
+        default=RANDOM_SEED_DEFAULT,
+        help="Random seed used for pattern sampling (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--lower-bound",
+        type=int,
+        default=None,
+        help=(
+            "Minimum length of home blocks between away games. If omitted, uses the "
+            "instance's SE1 min limit."
+        ),
+    )
+    parser.add_argument(
+        "--upper-bound",
+        type=int,
+        default=None,
+        help=(
+            "Maximum length of home blocks between away games. If omitted, uses the "
+            "instance's SE1 max limit."
+        ),
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    gurobi_lic = None
-    if len(sys.argv) < 2:
-        print("Usage: python exact_method.py <instance_file> [gurobi license file]")
-        sys.exit(1)
-    if len(sys.argv) > 2:
-        gurobi_lic_path = sys.argv[2]
-        with open(gurobi_lic_path, "r") as f:
+    args = parse_args()
+
+    if args.gurobi_license:
+        with open(args.gurobi_license, "r") as f:
             lic_content = f.read()
     else:
         lic_content = None
-    instance_file = sys.argv[1]
-    instance = Instance.from_file(instance_file)
+
+    instance = Instance.from_file(
+        args.instance, lb=args.lower_bound, ub=args.upper_bound
+    )
     instance.print_summary()
-    method = ExactMethod(instance, gurobi_lic=lic_content)
+    method = ExactMethod(
+        instance,
+        gurobi_lic=lic_content,
+        add_optimal_patterns=args.add_optimal_patterns,
+        patterns_per_team=args.patterns_per_team,
+        random_seed=args.random_seed,
+    )
     method.solve()
     if method.model.status == GRB.OPTIMAL:
         method.print_summary()
